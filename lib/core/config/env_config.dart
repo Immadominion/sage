@@ -85,7 +85,7 @@ class EnvConfig {
         );
         return 'http://localhost:3001';
       case Environment.development:
-        return 'http://localhost:3001';
+        return 'http://172.20.10.5:3001';
     }
   }
 
