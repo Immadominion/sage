@@ -145,10 +145,28 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
     }
 
     final txBase64 = base64Encode(signedTxs.first);
-    await walletRepo.submitSigned(
-      transactionBase64: txBase64,
-      setupLiveBotId: botId,
-    );
+
+    // Wait for foreground restoration after MWA session closes,
+    // then retry submitSigned with exponential backoff.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        await walletRepo.submitSigned(
+          transactionBase64: txBase64,
+          setupLiveBotId: botId,
+        );
+        return;
+      } catch (e) {
+        final isNetwork = e.toString().contains('SocketException') ||
+            e.toString().contains('Connection refused') ||
+            e.toString().contains('connection timeout');
+        if (!isNetwork || attempt == 2) rethrow;
+        debugPrint('[CreateStrategy] submitSigned attempt $attempt failed: $e');
+        await Future<void>.delayed(
+          Duration(milliseconds: 500 * (attempt + 1)),
+        );
+      }
+    }
   }
 
   /// Deploy — creates the bot and handles live-mode seal setup.
