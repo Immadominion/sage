@@ -234,7 +234,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       // Wait for foreground restoration after MWA session closes,
       // then retry submitSigned with exponential backoff.
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      for (var attempt = 0; attempt < 3; attempt++) {
+      for (var attempt = 0; attempt < 5; attempt++) {
         try {
           await walletRepo.submitSigned(
             transactionBase64: txBase64,
@@ -242,14 +242,19 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           );
           return;
         } catch (e) {
-          final isNetwork =
-              e.toString().contains('SocketException') ||
-              e.toString().contains('Connection refused') ||
-              e.toString().contains('connection timeout');
-          if (!isNetwork || attempt == 2) rethrow;
+          final msg = e.toString();
+          final isRetryable =
+              msg.contains('SocketException') ||
+              msg.contains('Connection refused') ||
+              msg.contains('connection timeout') ||
+              msg.contains('503') ||
+              msg.contains('Service Unavailable') ||
+              msg.contains('429') ||
+              msg.contains('Too Many Requests');
+          if (!isRetryable || attempt == 4) rethrow;
           debugPrint('[Setup] submitSigned attempt $attempt failed: $e');
           await Future<void>.delayed(
-            Duration(milliseconds: 500 * (attempt + 1)),
+            Duration(milliseconds: 1000 * (attempt + 1)),
           );
         }
       }
@@ -284,21 +289,26 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
       // Foreground delay + retry (same MWA background issue).
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      for (var attempt = 0; attempt < 3; attempt++) {
+      for (var attempt = 0; attempt < 5; attempt++) {
         try {
           await walletRepo.submitSigned(transactionBase64: txBase64);
           return;
         } catch (e) {
-          final isNetwork =
-              e.toString().contains('SocketException') ||
-              e.toString().contains('Connection refused') ||
-              e.toString().contains('connection timeout');
-          if (!isNetwork || attempt == 2) rethrow;
+          final msg = e.toString();
+          final isRetryable =
+              msg.contains('SocketException') ||
+              msg.contains('Connection refused') ||
+              msg.contains('connection timeout') ||
+              msg.contains('503') ||
+              msg.contains('Service Unavailable') ||
+              msg.contains('429') ||
+              msg.contains('Too Many Requests');
+          if (!isRetryable || attempt == 4) rethrow;
           debugPrint(
             '[Setup] submitSigned fallback attempt $attempt failed: $e',
           );
           await Future<void>.delayed(
-            Duration(milliseconds: 500 * (attempt + 1)),
+            Duration(milliseconds: 1000 * (attempt + 1)),
           );
         }
       }
@@ -400,7 +410,21 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             if (msg.contains('409') || msg.contains('already')) {
               liveSetupSucceeded = true;
             } else {
-              debugPrint('[Setup] setup-live failed: $e');
+              // Live setup failed — DON'T continue to markSetupComplete.
+              // The bot was created but has no agent/session keys.
+              // Stay on this screen so the user can retry.
+              if (mounted) {
+                setState(() => _isActivating = false);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '${_friendlyActivateError(e)} Tap to retry.',
+                    ),
+                    duration: const Duration(seconds: 5),
+                  ),
+                );
+              }
+              return;
             }
           }
       }
@@ -418,8 +442,13 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
       await _markSetupComplete();
 
-      // Refresh wallet balance so it shows immediately on the detail screen.
+      // Refresh wallet balance after a brief delay — the on-chain state
+      // from finalization may need a moment to propagate through the RPC.
       ref.invalidate(walletBalanceProvider);
+      // Schedule a second refresh 3 seconds later to catch any RPC cache lag.
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) ref.invalidate(walletBalanceProvider);
+      });
 
       if (mounted) {
         HapticFeedback.heavyImpact();

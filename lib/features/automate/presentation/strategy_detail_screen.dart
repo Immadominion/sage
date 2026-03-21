@@ -335,6 +335,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
             HapticFeedback.mediumImpact();
             ref.invalidate(botDetailProvider(widget.botId));
             ref.invalidate(botListProvider);
+            ref.invalidate(walletBalanceProvider);
             return;
           } catch (e) {
             if (attempt == 2) rethrow;
@@ -417,6 +418,14 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       transactionBase64: signed64,
       setupLiveBotId: bot.botId,
     );
+
+    // Refresh wallet balance immediately + delayed second refresh.
+    ref.invalidate(walletBalanceProvider);
+    Future.delayed(const Duration(seconds: 3), () {
+      try {
+        ref.invalidate(walletBalanceProvider);
+      } catch (_) {}
+    });
 
     // Wait for backend's finalizeLiveSession to populate agent/session keys.
     // Poll up to 5s — the on-chain confirmation + DB write typically takes 1-3s.

@@ -159,7 +159,7 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
     // Wait for foreground restoration after MWA session closes,
     // then retry submitSigned with exponential backoff.
     await Future<void>.delayed(const Duration(milliseconds: 500));
-    for (var attempt = 0; attempt < 3; attempt++) {
+    for (var attempt = 0; attempt < 5; attempt++) {
       try {
         await walletRepo.submitSigned(
           transactionBase64: txBase64,
@@ -167,13 +167,18 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
         );
         return;
       } catch (e) {
-        final isNetwork =
-            e.toString().contains('SocketException') ||
-            e.toString().contains('Connection refused') ||
-            e.toString().contains('connection timeout');
-        if (!isNetwork || attempt == 2) rethrow;
+        final msg = e.toString();
+        final isRetryable =
+            msg.contains('SocketException') ||
+            msg.contains('Connection refused') ||
+            msg.contains('connection timeout') ||
+            msg.contains('503') ||
+            msg.contains('Service Unavailable') ||
+            msg.contains('429') ||
+            msg.contains('Too Many Requests');
+        if (!isRetryable || attempt == 4) rethrow;
         debugPrint('[CreateStrategy] submitSigned attempt $attempt failed: $e');
-        await Future<void>.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        await Future<void>.delayed(Duration(milliseconds: 1000 * (attempt + 1)));
       }
     }
   }
@@ -315,6 +320,12 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
 
       // Refresh wallet balance so it shows immediately on the detail screen.
       ref.invalidate(walletBalanceProvider);
+      // Schedule a second refresh 3s later to catch any RPC cache lag.
+      Future.delayed(const Duration(seconds: 3), () {
+        try {
+          ref.invalidate(walletBalanceProvider);
+        } catch (_) {}
+      });
 
       // Ensure setup is marked complete (bot exists → setup is done).
       ref.read(authStateProvider.notifier).markSetupCompleted();
