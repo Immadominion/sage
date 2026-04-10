@@ -69,6 +69,7 @@ class PositionHistoryScreen extends ConsumerWidget {
 
           Expanded(
             child: historyAsync.when(
+              skipLoadingOnReload: true,
               loading: () =>
                   Center(child: CircularProgressIndicator(color: c.accent)),
               error: (err, _) => Center(

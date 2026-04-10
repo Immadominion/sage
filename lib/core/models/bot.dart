@@ -18,6 +18,7 @@ class Bot {
 
   // Strategy config
   final double entryScoreThreshold;
+  final double? mlThreshold;
   final double minVolume24h;
   final double minLiquidity;
   final double maxLiquidity;
@@ -46,20 +47,6 @@ class Bot {
   /// Always accurate whether the bot is running, stopped, or never started.
   final double currentBalanceSol;
 
-  // ── Seal Agent (per-bot wallet isolation, live mode only) ──
-
-  /// Public key of the agent registered on the user's Seal wallet.
-  /// Null for simulation-mode bots or if agent not yet registered.
-  final String? agentPubkey;
-
-  /// PDA of the AgentConfig account on-chain.
-  /// Null when agent not yet registered.
-  final String? agentConfigAddress;
-
-  /// PDA of the active SessionKey for this bot's agent.
-  /// Null when bot is stopped or session hasn't been created yet.
-  final String? sessionAddress;
-
   // Live engine data (only when running)
   final int activePositionCount;
   final bool engineRunning;
@@ -76,6 +63,7 @@ class Bot {
     required this.status,
     required this.strategyMode,
     required this.entryScoreThreshold,
+    this.mlThreshold,
     required this.minVolume24h,
     required this.minLiquidity,
     required this.maxLiquidity,
@@ -93,9 +81,6 @@ class Bot {
     required this.winningTrades,
     required this.totalPnlLamports,
     required this.currentBalanceSol,
-    this.agentPubkey,
-    this.agentConfigAddress,
-    this.sessionAddress,
     this.lastError,
     this.lastActivityAt,
     required this.createdAt,
@@ -127,6 +112,7 @@ class Bot {
       status: _parseStatus(botData['status'] as String),
       strategyMode: _parseStrategyMode(botData['strategyMode'] as String),
       entryScoreThreshold: _parseDouble(botData['entryScoreThreshold']),
+      mlThreshold: _parseDoubleNullable(botData['mlThreshold']),
       minVolume24h: _parseDouble(botData['minVolume24h']),
       minLiquidity: _parseDouble(botData['minLiquidity']),
       maxLiquidity: _parseDouble(botData['maxLiquidity']),
@@ -150,9 +136,6 @@ class Bot {
           _parseDoubleNullable(json['currentBalanceSol']) ??
           _parseDoubleNullable(botData['currentBalanceSol']) ??
           _parseDouble(botData['simulationBalanceSOL']),
-      agentPubkey: botData['agentPubkey'] as String?,
-      agentConfigAddress: botData['agentConfigAddress'] as String?,
-      sessionAddress: botData['sessionAddress'] as String?,
       lastError: botData['lastError'] as String?,
       lastActivityAt: botData['lastActivityAt'] != null
           ? DateTime.parse(botData['lastActivityAt'] as String)

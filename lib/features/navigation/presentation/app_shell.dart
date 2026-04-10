@@ -117,8 +117,8 @@ class AppShell extends StatelessWidget {
                 ),
               ),
 
-              // ── Voice button — bottom center (hidden on Intelligence tab) ──
-              if (navigationShell.currentIndex != 1)
+              // ── Voice button — bottom center (only on Automate tab as "New Strategy") ──
+              if (navigationShell.currentIndex == 2)
                 Positioned(
                   bottom: bottomPad + 16.h,
                   left: 0,

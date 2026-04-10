@@ -329,7 +329,6 @@ class AuthNotifier extends AsyncNotifier<User?> {
         User(
           id: current.id,
           walletAddress: current.walletAddress,
-          sealWalletAddress: current.sealWalletAddress,
           displayName: current.displayName,
           setupCompleted: true,
           execMode: current.execMode,

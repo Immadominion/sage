@@ -4,6 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
+import 'package:sage/core/config/live_trading_flags.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/features/setup/models/risk_profile.dart';
 import 'package:sage/features/setup/presentation/widgets/path_card.dart';
@@ -43,7 +44,7 @@ class PathStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLive = mode == ExecutionMode.live;
+    final isLive = kLiveTradingEnabled && mode == ExecutionMode.live;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -201,7 +202,9 @@ class PathStep extends StatelessWidget {
                     children: [
                       _StatusPill(
                         label: 'Simulation',
-                        isSelected: mode == ExecutionMode.simulation,
+                        isSelected:
+                            mode == ExecutionMode.simulation ||
+                            !kLiveTradingEnabled,
                         activeBgColor: const Color(0xFFE5F0FF),
                         activeBorderColor: const Color(0xFFB4C8F0),
                         activeTextColor: const Color(0xFF1E3A5F),
@@ -213,17 +216,43 @@ class PathStep extends StatelessWidget {
                       SizedBox(width: 10.w),
                       _StatusPill(
                         label: 'Live',
-                        isSelected: mode == ExecutionMode.live,
+                        isSelected:
+                            kLiveTradingEnabled && mode == ExecutionMode.live,
                         activeBgColor: const Color(0xFFF5E6FF),
                         activeBorderColor: const Color(0xFFD4BFEB),
                         activeTextColor: const Color(0xFF4A1E7B),
                         icon: PhosphorIconsRegular.spinnerGap,
                         onTap: () => onModeChanged(ExecutionMode.live),
+                        enabled: kLiveTradingEnabled,
                         c: c,
                         text: text,
                       ),
                     ],
                   ).animate().fadeIn(duration: 400.ms, delay: 350.ms),
+
+                  if (!kLiveTradingEnabled)
+                    Padding(
+                      padding: EdgeInsets.only(top: 8.h),
+                      child: Row(
+                        children: [
+                          Icon(
+                            PhosphorIconsBold.info,
+                            size: 13.sp,
+                            color: c.textTertiary,
+                          ),
+                          SizedBox(width: 6.w),
+                          Expanded(
+                            child: Text(
+                              kLiveTradingDisabledReason,
+                              style: text.bodySmall?.copyWith(
+                                color: c.textTertiary,
+                                fontSize: 11.sp,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
 
                   // ── Live warning ──
                   AnimatedCrossFade(
@@ -306,6 +335,7 @@ class _StatusPill extends StatelessWidget {
   final Color activeTextColor;
   final IconData icon;
   final VoidCallback onTap;
+  final bool enabled;
   final SageColors c;
   final TextTheme text;
 
@@ -317,6 +347,7 @@ class _StatusPill extends StatelessWidget {
     required this.activeTextColor,
     required this.icon,
     required this.onTap,
+    this.enabled = true,
     required this.c,
     required this.text,
   });
@@ -324,15 +355,21 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
+      onTap: enabled
+          ? () {
+              HapticFeedback.selectionClick();
+              onTap();
+            }
+          : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
         decoration: BoxDecoration(
-          color: isSelected ? activeBgColor : Colors.transparent,
+          color: isSelected
+              ? activeBgColor
+              : enabled
+              ? Colors.transparent
+              : c.surface,
           borderRadius: BorderRadius.circular(100.r),
           border: Border.all(
             color: isSelected ? activeBorderColor : c.borderSubtle,
@@ -345,13 +382,21 @@ class _StatusPill extends StatelessWidget {
             Icon(
               icon,
               size: 16.sp,
-              color: isSelected ? activeTextColor : c.textTertiary,
+              color: isSelected
+                  ? activeTextColor
+                  : enabled
+                  ? c.textTertiary
+                  : c.textTertiary.withValues(alpha: 0.45),
             ),
             SizedBox(width: 6.w),
             Text(
               label,
               style: text.bodyMedium?.copyWith(
-                color: isSelected ? activeTextColor : c.textSecondary,
+                color: isSelected
+                    ? activeTextColor
+                    : enabled
+                    ? c.textSecondary
+                    : c.textTertiary.withValues(alpha: 0.65),
                 fontWeight: isSelected ? FontWeight.w500 : FontWeight.w400,
                 fontSize: 14.sp,
               ),

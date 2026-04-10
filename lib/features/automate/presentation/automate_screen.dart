@@ -44,9 +44,7 @@ class AutomateScreen extends ConsumerWidget {
             event.isBotStopped ||
             event.isBotError ||
             event.isScanCompleted) {
-          ref
-              .read(botListProvider.notifier)
-              .refresh();
+          ref.read(botListProvider.notifier).refresh();
         }
       });
     });
@@ -54,6 +52,7 @@ class AutomateScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: c.background,
       body: botsAsync.when(
+        skipLoadingOnReload: true,
         loading: () =>
             Center(child: CircularProgressIndicator(color: c.accent)),
         error: (err, _) => _buildErrorState(ref, c, text, err),
@@ -105,8 +104,7 @@ class AutomateScreen extends ConsumerWidget {
           ),
           SizedBox(height: 16.h),
           TextButton.icon(
-            onPressed: () =>
-                ref.read(botListProvider.notifier).refresh(),
+            onPressed: () => ref.read(botListProvider.notifier).refresh(),
             icon: Icon(Icons.refresh, size: 18.sp, color: c.accent),
             label: Text('Retry', style: TextStyle(color: c.accent)),
           ),
@@ -357,6 +355,12 @@ class AutomateScreen extends ConsumerWidget {
                         ? '${pnl.toStringAsFixed(2)} SOL'
                         : '0.00 SOL';
 
+                    final waitingForMlEntry =
+                        bot.engineRunning &&
+                        bot.strategyMode == StrategyMode.sageAi &&
+                        (bot.engineStats?.positionsOpened ?? 0) == 0 &&
+                        (bot.engineStats?.totalScans ?? 0) > 0;
+
                     final lastActivity = bot.lastActivityAt != null
                         ? _relativeTime(bot.lastActivityAt!)
                         : 'No activity';
@@ -377,8 +381,9 @@ class AutomateScreen extends ConsumerWidget {
                             name: bot.name,
                             trigger:
                                 'Score ≥ ${bot.entryScoreThreshold.toStringAsFixed(0)}% · ${bot.positionSizeSOL.toStringAsFixed(1)} SOL',
-                            lastAction:
-                                '$lastActivity · ${bot.engineStats?.totalScans ?? 0} scans',
+                            lastAction: waitingForMlEntry
+                                ? '$lastActivity · awaiting ML entry'
+                                : '$lastActivity · ${bot.engineStats?.totalScans ?? 0} scans',
                             pnl: pnlStr,
                             state: state,
                           ),

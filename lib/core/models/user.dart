@@ -2,7 +2,6 @@
 class User {
   final int id;
   final String walletAddress;
-  final String? sealWalletAddress;
   final String? displayName;
   final bool setupCompleted;
   final String? execMode;
@@ -11,7 +10,6 @@ class User {
   const User({
     required this.id,
     required this.walletAddress,
-    this.sealWalletAddress,
     this.displayName,
     this.setupCompleted = false,
     this.execMode,
@@ -21,7 +19,6 @@ class User {
   factory User.fromJson(Map<String, dynamic> json) => User(
     id: json['id'] as int,
     walletAddress: json['walletAddress'] as String,
-    sealWalletAddress: json['sealWalletAddress'] as String?,
     displayName: json['displayName'] as String?,
     setupCompleted: json['setupCompleted'] as bool? ?? false,
     execMode: json['execMode'] as String?,
@@ -31,7 +28,6 @@ class User {
   Map<String, dynamic> toJson() => {
     'id': id,
     'walletAddress': walletAddress,
-    'sealWalletAddress': sealWalletAddress,
     'displayName': displayName,
     'setupCompleted': setupCompleted,
     'execMode': execMode,

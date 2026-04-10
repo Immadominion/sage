@@ -77,6 +77,7 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
 
           // ── Platform stats hero ──
           statsAsync.when(
+            skipLoadingOnReload: true,
             loading: () => _buildStatsPlaceholder(c, text),
             error: (_, _) => _buildStatsPlaceholder(c, text),
             data: (stats) => _buildStatsHero(c, text, stats),
@@ -140,6 +141,7 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
 
           // ── Leaderboard ──
           leaderboardAsync.when(
+            skipLoadingOnReload: true,
             loading: () => Padding(
               padding: EdgeInsets.only(top: 40.h),
               child: Center(

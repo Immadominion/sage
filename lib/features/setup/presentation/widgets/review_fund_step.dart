@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
+import 'package:sage/core/config/simulation_defaults.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/features/setup/models/risk_profile.dart';
 import 'package:sage/features/setup/presentation/widgets/step_indicator.dart';
@@ -21,6 +22,8 @@ class ReviewFundStep extends StatefulWidget {
   final SetupPath path;
   final ExecutionMode mode;
   final double positionSizeSOL;
+  final double simulationBalanceSOL;
+  final ValueChanged<double>? onSimulationBalanceChanged;
   final int maxConcurrentPositions;
   final double profitTargetPercent;
   final double stopLossPercent;
@@ -53,6 +56,8 @@ class ReviewFundStep extends StatefulWidget {
     required this.path,
     required this.mode,
     required this.positionSizeSOL,
+    required this.simulationBalanceSOL,
+    this.onSimulationBalanceChanged,
     required this.maxConcurrentPositions,
     required this.profitTargetPercent,
     required this.stopLossPercent,
@@ -74,10 +79,17 @@ class ReviewFundStep extends StatefulWidget {
 
 class _ReviewFundStepState extends State<ReviewFundStep> {
   late double _depositAmount;
+  late double _simulationBalanceAmount;
   bool _disclaimerAccepted = false;
 
   double get _recommended =>
       widget.positionSizeSOL * widget.maxConcurrentPositions;
+  double get _simulationRecommended => recommendedSimulationBalanceSOL(
+    positionSizeSOL: widget.positionSizeSOL,
+    maxConcurrentPositions: widget.maxConcurrentPositions,
+  );
+  double get _simulationMinimum =>
+      minimumSimulationBalanceSOL(widget.positionSizeSOL);
   // Minimum = position size + 0.075 SOL overhead (rent + fees + finalization),
   // rounded up to nearest 0.05 SOL
   double get _minimum =>
@@ -92,6 +104,22 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
   void initState() {
     super.initState();
     _depositAmount = math.max(_recommended, _minimum);
+    _simulationBalanceAmount = clampSimulationBalanceSOL(
+      requested: widget.simulationBalanceSOL,
+      positionSizeSOL: widget.positionSizeSOL,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant ReviewFundStep oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.positionSizeSOL != widget.positionSizeSOL ||
+        oldWidget.simulationBalanceSOL != widget.simulationBalanceSOL) {
+      _simulationBalanceAmount = clampSimulationBalanceSOL(
+        requested: widget.simulationBalanceSOL,
+        positionSizeSOL: widget.positionSizeSOL,
+      );
+    }
   }
 
   @override
@@ -289,9 +317,60 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
               ),
             ).animate().fadeIn(duration: 400.ms, delay: 270.ms),
           ] else if (!_isLive) ...[
+            _sectionLabel(
+              'SIMULATION CAPITAL',
+            ).animate().fadeIn(duration: 400.ms, delay: 250.ms),
+            SizedBox(height: 10.h),
+            GestureDetector(
+              onTap: _openSimulationBalanceEditor,
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.h),
+                child: Row(
+                  children: [
+                    Text(
+                      'Virtual Capital',
+                      style: widget.text.titleMedium?.copyWith(
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.w600,
+                        color: widget.c.textSecondary,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${_simulationBalanceAmount.toStringAsFixed(1)} SOL',
+                      style: widget.text.titleMedium?.copyWith(
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.w700,
+                        color: widget.c.accent,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    SizedBox(width: 6.w),
+                    Icon(
+                      PhosphorIconsBold.pencilSimple,
+                      size: 12.sp,
+                      color: widget.c.textTertiary.withValues(alpha: 0.5),
+                    ),
+                  ],
+                ),
+              ),
+            ).animate().fadeIn(duration: 400.ms, delay: 260.ms),
+            Padding(
+              padding: EdgeInsets.only(top: 4.h),
+              child: Text(
+                'Minimum viable balance: ${_simulationMinimum.toStringAsFixed(1)} SOL. '
+                'Recommended: ${_simulationRecommended.toStringAsFixed(1)} SOL.',
+                style: widget.text.bodySmall?.copyWith(
+                  color: widget.c.textTertiary,
+                  fontSize: 11.sp,
+                ),
+              ),
+            ).animate().fadeIn(duration: 400.ms, delay: 265.ms),
+            SizedBox(height: 14.h),
             Text(
               'No wallet needed — you\'re trading with virtual SOL '
-              'using real market data.',
+              'using real market data. This only affects the simulation bankroll.',
               style: widget.text.bodySmall?.copyWith(
                 color: widget.c.textTertiary,
                 fontSize: 12.sp,
@@ -468,16 +547,45 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
     SageBottomSheet.show<double>(
       context: context,
       title: 'Deposit Amount',
-      builder: (c, text) => _DepositEditorContent(
+      builder: (c, text) => _AmountEditorContent(
         current: _depositAmount,
         min: _minimum,
         max: _recommended * 2,
         recommended: _recommended,
+        confirmLabel: 'Set Amount',
+        recommendedLabel: 'Recommended',
         c: c,
         text: text,
       ),
     ).then((value) {
       if (value != null) setState(() => _depositAmount = value);
+    });
+  }
+
+  void _openSimulationBalanceEditor() {
+    HapticFeedback.selectionClick();
+
+    SageBottomSheet.show<double>(
+      context: context,
+      title: 'Simulation Capital',
+      builder: (c, text) => _AmountEditorContent(
+        current: _simulationBalanceAmount,
+        min: _simulationMinimum,
+        max: kMaxSimulationBalanceSOL,
+        recommended: _simulationRecommended,
+        confirmLabel: 'Set Capital',
+        recommendedLabel: 'Recommended',
+        c: c,
+        text: text,
+      ),
+    ).then((value) {
+      if (value == null) return;
+      final nextValue = clampSimulationBalanceSOL(
+        requested: value,
+        positionSizeSOL: widget.positionSizeSOL,
+      );
+      setState(() => _simulationBalanceAmount = nextValue);
+      widget.onSimulationBalanceChanged?.call(nextValue);
     });
   }
 
@@ -574,8 +682,8 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
                 if (_isLive) ...[
                   SizedBox(height: 6.h),
                   _bullet(
-                    'SOL is deposited into a Seal wallet '
-                    'under your signing authority.',
+                    'SOL is deposited into a bot wallet '
+                    'managed by the server on your behalf.',
                   ),
                 ],
               ],
@@ -625,28 +733,32 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
 // Deposit Editor — slider inside SageBottomSheet (matches param editor)
 // ═══════════════════════════════════════════════════════════════
 
-class _DepositEditorContent extends StatefulWidget {
+class _AmountEditorContent extends StatefulWidget {
   final double current;
   final double min;
   final double max;
   final double recommended;
+  final String confirmLabel;
+  final String recommendedLabel;
   final SageColors c;
   final TextTheme text;
 
-  const _DepositEditorContent({
+  const _AmountEditorContent({
     required this.current,
     required this.min,
     required this.max,
     required this.recommended,
+    required this.confirmLabel,
+    required this.recommendedLabel,
     required this.c,
     required this.text,
   });
 
   @override
-  State<_DepositEditorContent> createState() => _DepositEditorContentState();
+  State<_AmountEditorContent> createState() => _AmountEditorContentState();
 }
 
-class _DepositEditorContentState extends State<_DepositEditorContent> {
+class _AmountEditorContentState extends State<_AmountEditorContent> {
   late double _value;
 
   @override
@@ -718,7 +830,7 @@ class _DepositEditorContentState extends State<_DepositEditorContent> {
                   setState(() => _value = widget.recommended);
                 },
                 child: Text(
-                  'Recommended ${widget.recommended.toStringAsFixed(1)}',
+                  '${widget.recommendedLabel} ${widget.recommended.toStringAsFixed(1)}',
                   style: text.labelSmall?.copyWith(
                     color: c.accent,
                     fontWeight: FontWeight.w600,
@@ -754,7 +866,7 @@ class _DepositEditorContentState extends State<_DepositEditorContent> {
             ),
             child: Center(
               child: Text(
-                'Set Amount',
+                widget.confirmLabel,
                 style: text.labelLarge?.copyWith(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,

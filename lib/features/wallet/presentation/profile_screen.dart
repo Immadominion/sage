@@ -7,9 +7,8 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sage/core/config/env_config.dart';
+import 'package:sage/core/config/live_trading_flags.dart';
 import 'package:sage/core/repositories/bot_repository.dart';
-import 'package:sage/core/models/wallet.dart';
-import 'package:sage/core/repositories/wallet_repository.dart';
 import 'package:sage/core/services/auth_service.dart';
 import 'package:sage/core/services/domain_resolver.dart';
 import 'package:sage/core/theme/app_colors.dart';
@@ -23,9 +22,6 @@ import 'package:sage/features/wallet/presentation/widgets/support_link.dart';
 import 'package:sage/features/wallet/presentation/widgets/stat_item.dart';
 import 'package:sage/features/wallet/presentation/widgets/setting_tile.dart';
 import 'package:sage/shared/widgets/mwa_button_tap_effect.dart';
-import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
-import 'package:sage/shared/widgets/deposit_sheet.dart';
-import 'package:sage/shared/widgets/withdraw_sheet.dart';
 
 /// Profile — wallet identity, portfolio summary, settings entry.
 ///
@@ -82,17 +78,9 @@ class ProfileScreen extends ConsumerWidget {
     );
     final runningBots = bots.where((b) => b.engineRunning).length;
 
-    // Wallet balance
-    final walletBalanceAsync = ref.watch(walletBalanceProvider);
-    final idleBalanceLabel = walletBalanceAsync.when(
-      data: (wb) => '${wb.balanceSOL.toStringAsFixed(2)} SOL',
-      loading: () => '… SOL',
-      error: (_, _) => 'No wallet',
-    );
-
-    // Seal wallet on-chain state
-    final walletStateAsync = ref.watch(walletStateProvider);
-    final sealWallet = walletStateAsync.whenOrNull(data: (ws) => ws);
+    // Wallet balance — per-bot in new API; global display unavailable until
+    // live mode is re-enabled.
+    final idleBalanceLabel = 'Unavailable';
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
@@ -151,7 +139,7 @@ class ProfileScreen extends ConsumerWidget {
                           border: Border.all(color: c.borderSubtle, width: 1),
                         ),
                         child: Icon(
-                          PhosphorIconsBold.gearSix,
+                          PhosphorIconsBold.gear,
                           size: 20.sp,
                           color: c.textSecondary,
                         ),
@@ -477,222 +465,136 @@ class ProfileScreen extends ConsumerWidget {
                       ),
                     ),
                     // ── Bottom: Deposit / Withdraw buttons ──
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border(
-                          top: BorderSide(color: c.borderSubtle, width: 1),
+                    if (kLiveTradingEnabled)
+                      Container(
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(color: c.borderSubtle, width: 1),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: MWAButtonTapEffect(
+                                onTap: () =>
+                                    _showDepositSheet(context, ref, c, text),
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(vertical: 14.h),
+                                  decoration: BoxDecoration(
+                                    color: c.accent.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.only(
+                                      bottomLeft: Radius.circular(24.r),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        PhosphorIconsBold.arrowDown,
+                                        size: 16.sp,
+                                        color: c.accent,
+                                      ),
+                                      SizedBox(width: 6.w),
+                                      Text(
+                                        'Deposit',
+                                        style: text.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          color: c.accent,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Container(
+                              width: 1,
+                              height: 44.h,
+                              color: c.borderSubtle,
+                            ),
+                            Expanded(
+                              child: MWAButtonTapEffect(
+                                onTap: () => _showWithdrawSheet(
+                                  context,
+                                  ref,
+                                  0.0,
+                                  c,
+                                  text,
+                                ),
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(vertical: 14.h),
+                                  decoration: BoxDecoration(
+                                    color: c.accent.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.only(
+                                      bottomRight: Radius.circular(24.r),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        PhosphorIconsBold.arrowUp,
+                                        size: 16.sp,
+                                        color: c.accent,
+                                      ),
+                                      SizedBox(width: 6.w),
+                                      Text(
+                                        'Withdraw',
+                                        style: text.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          color: c.accent,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.all(16.w),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(color: c.borderSubtle, width: 1),
+                          ),
+                        ),
+                        child: Text(
+                          kLiveTradingDisabledReason,
+                          style: text.bodySmall?.copyWith(
+                            color: c.textSecondary,
+                            fontSize: 12.sp,
+                            height: 1.5,
+                          ),
                         ),
                       ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: MWAButtonTapEffect(
-                              onTap: () =>
-                                  _showDepositSheet(context, ref, c, text),
-                              child: Container(
-                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                decoration: BoxDecoration(
-                                  color: c.accent.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.only(
-                                    bottomLeft: Radius.circular(24.r),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      PhosphorIconsBold.arrowDown,
-                                      size: 16.sp,
-                                      color: c.accent,
-                                    ),
-                                    SizedBox(width: 6.w),
-                                    Text(
-                                      'Deposit',
-                                      style: text.titleSmall?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                        color: c.accent,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          Container(
-                            width: 1,
-                            height: 44.h,
-                            color: c.borderSubtle,
-                          ),
-                          Expanded(
-                            child: MWAButtonTapEffect(
-                              onTap: () => _showWithdrawSheet(
-                                context,
-                                ref,
-                                walletBalanceAsync,
-                                c,
-                                text,
-                              ),
-                              child: Container(
-                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                decoration: BoxDecoration(
-                                  color: c.accent.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.only(
-                                    bottomRight: Radius.circular(24.r),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      PhosphorIconsBold.arrowUp,
-                                      size: 16.sp,
-                                      color: c.accent,
-                                    ),
-                                    SizedBox(width: 6.w),
-                                    Text(
-                                      'Withdraw',
-                                      style: text.titleSmall?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                        color: c.accent,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                 ),
               ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.1, end: 0),
 
               SizedBox(height: 24.h),
 
-              // ── Seal Wallet Info ──
-              if (sealWallet != null && sealWallet.exists) ...[
-                Container(
-                  width: double.infinity,
-                  padding: EdgeInsets.all(16.w),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16.r),
-                    color: c.surface,
-                    border: Border.all(color: c.borderSubtle, width: 1),
+              // ── Wallet Info (live mode not yet available) ──
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(16.w),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16.r),
+                  color: c.surface,
+                  border: Border.all(color: c.borderSubtle, width: 1),
+                ),
+                child: Text(
+                  'Live wallet details will appear here when live trading is enabled.',
+                  style: text.bodySmall?.copyWith(
+                    color: c.textSecondary,
+                    fontSize: 12.sp,
+                    height: 1.5,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            PhosphorIconsBold.shieldCheck,
-                            size: 16.sp,
-                            color: c.accent,
-                          ),
-                          SizedBox(width: 8.w),
-                          Text(
-                            'SEAL WALLET',
-                            style: text.labelMedium?.copyWith(
-                              letterSpacing: 1.2,
-                              color: c.textTertiary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 12.h),
-                      // Address row
-                      Row(
-                        children: [
-                          Text(
-                            'Address',
-                            style: text.bodySmall?.copyWith(
-                              color: c.textTertiary,
-                              fontSize: 11.sp,
-                            ),
-                          ),
-                          const Spacer(),
-                          GestureDetector(
-                            onTap: () {
-                              Clipboard.setData(
-                                ClipboardData(text: sealWallet.address),
-                              );
-                              HapticFeedback.lightImpact();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Wallet address copied'),
-                                ),
-                              );
-                            },
-                            child: Row(
-                              children: [
-                                Text(
-                                  '${sealWallet.address.substring(0, 6)}…${sealWallet.address.substring(sealWallet.address.length - 4)}',
-                                  style: text.bodySmall?.copyWith(
-                                    fontFamily: 'monospace',
-                                    fontSize: 11.sp,
-                                    color: c.textSecondary,
-                                  ),
-                                ),
-                                SizedBox(width: 4.w),
-                                Icon(
-                                  PhosphorIconsBold.copy,
-                                  size: 12.sp,
-                                  color: c.textTertiary,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 8.h),
-                      // Balance row
-                      Row(
-                        children: [
-                          Text(
-                            'Balance',
-                            style: text.bodySmall?.copyWith(
-                              color: c.textTertiary,
-                              fontSize: 11.sp,
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            idleBalanceLabel,
-                            style: text.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 11.sp,
-                              color: c.textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 8.h),
-                      // Daily limit row
-                      Row(
-                        children: [
-                          Text(
-                            'Daily Limit',
-                            style: text.bodySmall?.copyWith(
-                              color: c.textTertiary,
-                              fontSize: 11.sp,
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${sealWallet.dailyLimitSOL.toStringAsFixed(1)} SOL '
-                            '(${sealWallet.remainingTodaySOL.toStringAsFixed(1)} remaining)',
-                            style: text.bodySmall?.copyWith(
-                              fontSize: 11.sp,
-                              color: c.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.1, end: 0),
-              ],
+                ),
+              ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.1, end: 0),
 
               SizedBox(height: 32.h),
 
@@ -760,16 +662,11 @@ void _showDepositSheet(
   SageColors c,
   TextTheme text,
 ) {
-  SageBottomSheet.show<bool>(
-    context: context,
-    title: 'Fund Wallet',
-    builder: (c, text) =>
-        DepositSheet(recommendedSol: 1.0, minSol: 0.1, c: c, text: text),
-  ).then((success) {
-    if (success == true) {
-      ref.invalidate(walletBalanceProvider);
-    }
-  });
+  // Profile-level deposit/withdraw requires selecting a bot first.
+  // For now, direct the user to the bot detail screen.
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Open a bot to deposit or withdraw funds.')),
+  );
 }
 
 // ─────────────────────────────────────────────────────────
@@ -779,34 +676,14 @@ void _showDepositSheet(
 void _showWithdrawSheet(
   BuildContext context,
   WidgetRef ref,
-  AsyncValue<WalletBalance> walletBalanceAsync,
+  double balance,
   SageColors c,
   TextTheme text,
 ) {
-  final balance = walletBalanceAsync.when(
-    data: (wb) => wb.balanceSOL,
-    loading: () => 0.0,
-    error: (_, _) => 0.0,
+  // Profile-level deposit/withdraw requires selecting a bot first.
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Open a bot to deposit or withdraw funds.')),
   );
-
-  if (balance <= 0.003) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No funds available to withdraw')),
-    );
-    return;
-  }
-
-  SageBottomSheet.show<bool>(
-    context: context,
-    title: 'Withdraw',
-    builder: (c, text) =>
-        WithdrawSheet(availableBalanceSol: balance, c: c, text: text),
-  ).then((success) {
-    if (success == true) {
-      // Refresh balance providers
-      ref.invalidate(walletBalanceProvider);
-    }
-  });
 }
 
 // ─────────────────────────────────────────────────────────

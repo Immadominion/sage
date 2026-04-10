@@ -58,6 +58,7 @@ class StrategyParams {
   final double? minLiquidity;
   final double? maxLiquidity;
   final double? positionSizeSOL;
+  final double? simulationBalanceSOL;
   final int? maxConcurrentPositions;
   final int? defaultBinRange;
   final double? profitTargetPercent;
@@ -72,6 +73,7 @@ class StrategyParams {
     this.minLiquidity,
     this.maxLiquidity,
     this.positionSizeSOL,
+    this.simulationBalanceSOL,
     this.maxConcurrentPositions,
     this.defaultBinRange,
     this.profitTargetPercent,
@@ -87,6 +89,7 @@ class StrategyParams {
       minLiquidity == null &&
       maxLiquidity == null &&
       positionSizeSOL == null &&
+      simulationBalanceSOL == null &&
       maxConcurrentPositions == null &&
       defaultBinRange == null &&
       profitTargetPercent == null &&
@@ -102,6 +105,7 @@ class StrategyParams {
       minLiquidity: (json['minLiquidity'] as num?)?.toDouble(),
       maxLiquidity: (json['maxLiquidity'] as num?)?.toDouble(),
       positionSizeSOL: (json['positionSizeSOL'] as num?)?.toDouble(),
+      simulationBalanceSOL: (json['simulationBalanceSOL'] as num?)?.toDouble(),
       maxConcurrentPositions: json['maxConcurrentPositions'] as int?,
       defaultBinRange: json['defaultBinRange'] as int?,
       profitTargetPercent: (json['profitTargetPercent'] as num?)?.toDouble(),
@@ -118,6 +122,7 @@ class StrategyParams {
     double? minLiquidity,
     double? maxLiquidity,
     double? positionSizeSOL,
+    double? simulationBalanceSOL,
     int? maxConcurrentPositions,
     int? defaultBinRange,
     double? profitTargetPercent,
@@ -132,6 +137,7 @@ class StrategyParams {
       minLiquidity: minLiquidity ?? this.minLiquidity,
       maxLiquidity: maxLiquidity ?? this.maxLiquidity,
       positionSizeSOL: positionSizeSOL ?? this.positionSizeSOL,
+      simulationBalanceSOL: simulationBalanceSOL ?? this.simulationBalanceSOL,
       maxConcurrentPositions:
           maxConcurrentPositions ?? this.maxConcurrentPositions,
       defaultBinRange: defaultBinRange ?? this.defaultBinRange,
@@ -151,6 +157,9 @@ class StrategyParams {
     if (minLiquidity != null) map['minLiquidity'] = minLiquidity;
     if (maxLiquidity != null) map['maxLiquidity'] = maxLiquidity;
     if (positionSizeSOL != null) map['positionSizeSOL'] = positionSizeSOL;
+    if (simulationBalanceSOL != null) {
+      map['simulationBalanceSOL'] = simulationBalanceSOL;
+    }
     if (maxConcurrentPositions != null)
       map['maxConcurrentPositions'] = maxConcurrentPositions;
     if (defaultBinRange != null) map['defaultBinRange'] = defaultBinRange;

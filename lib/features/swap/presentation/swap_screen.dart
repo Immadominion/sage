@@ -65,6 +65,7 @@ class SwapScreen extends ConsumerWidget {
             // ── ML Model Status ──
             mlHealthAsync
                 .when(
+                  skipLoadingOnReload: true,
                   loading: () => ModelCard(
                     status: 'Loading...',
                     statusColor: c.textTertiary,

@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import 'package:sage/core/models/bot.dart';
 import 'package:sage/core/models/bot_event.dart';
 import 'package:sage/core/repositories/bot_repository.dart';
-import 'package:sage/core/repositories/wallet_repository.dart';
 import 'package:sage/core/repositories/position_repository.dart';
 import 'package:sage/core/services/event_service.dart';
 import 'package:sage/core/theme/app_colors.dart';
@@ -58,13 +57,12 @@ class HomeScreen extends ConsumerWidget {
     ref.listen<AsyncValue<BotEvent>>(botEventStreamProvider, (_, next) {
       next.whenData((event) {
         if (event.isPositionOpened || event.isPositionClosed) {
-          ref.invalidate(botListProvider);
+          ref.read(botListProvider.notifier).refresh();
           ref.invalidate(activePositionsProvider);
         } else if (event.isBotStarted ||
             event.isBotStopped ||
-            event.isBotError ||
-            event.isScanCompleted) {
-          ref.invalidate(botListProvider);
+            event.isBotError) {
+          ref.read(botListProvider.notifier).refresh();
         }
       });
     });
@@ -72,6 +70,7 @@ class HomeScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: c.background,
       body: botsAsync.when(
+        skipLoadingOnReload: true,
         loading: () => _buildShell(
           context,
           ref,
@@ -140,14 +139,8 @@ class HomeScreen extends ConsumerWidget {
               ) /
               runningBots.length;
 
-    // Real Seal wallet balance (idle SOL)
-    final walletBalanceAsync = ref.watch(walletBalanceProvider);
-    final walletBalanceSol = walletBalanceAsync.whenOrNull(
-      data: (wb) => wb.balanceSOL,
-    );
-
-    // Hero: show wallet balance if available, otherwise sum of live bot balances
-    final heroBalance = walletBalanceSol ?? totalDeployed;
+    // Hero: sum of all bot balances (simulation + live)
+    final heroBalance = totalDeployed;
 
     final wholePart = heroBalance.toStringAsFixed(1).split('.')[0];
     final decimalPart = '.${heroBalance.toStringAsFixed(1).split('.')[1]} SOL';
@@ -178,7 +171,7 @@ class HomeScreen extends ConsumerWidget {
                   SizedBox(height: topPad + 56.h),
 
                   const SageLabel(
-                    'WALLET',
+                    'HOME',
                   ).animate().fadeIn(duration: 500.ms, delay: 200.ms),
 
                   SizedBox(height: 10.h),
@@ -450,7 +443,9 @@ class HomeScreen extends ConsumerWidget {
                   ),
                   SizedBox(height: 8.h),
                   TextButton.icon(
-                    onPressed: () => ref.invalidate(botListProvider),
+                    onPressed: () => ref
+                        .read(botListProvider.notifier)
+                        .refresh(showLoading: true),
                     icon: Icon(Icons.refresh, size: 16.sp, color: c.accent),
                     label: Text(
                       'Retry',

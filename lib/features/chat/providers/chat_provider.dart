@@ -358,6 +358,15 @@ class ChatNotifier extends Notifier<ChatState> {
 class SetupChatNotifier extends Notifier<ChatState> {
   late final AudioRecorder _recorder;
 
+  /// Simulation bankroll set by the setup screen so the AI
+  /// can propose capital-coherent strategies.
+  double? _simulationBalanceSOL;
+
+  /// Tell the AI the user's simulation bankroll for capital-aware suggestions.
+  void setSimulationBalance(double balance) {
+    _simulationBalanceSOL = balance;
+  }
+
   @override
   ChatState build() {
     _recorder = AudioRecorder();
@@ -401,7 +410,15 @@ class SetupChatNotifier extends Notifier<ChatState> {
     try {
       // Use latestParams if still visible, otherwise pull from the
       // last message that carried params (covers the dismissed-card case).
-      final effectiveParams = state.latestParams ?? _lastKnownParams();
+      final baseParams = state.latestParams ?? _lastKnownParams();
+
+      // Ensure the simulation bankroll is always included so the AI
+      // respects capital constraints when suggesting strategies.
+      final effectiveParams = _simulationBalanceSOL != null
+          ? (baseParams ?? const StrategyParams()).copyWith(
+              simulationBalanceSOL: _simulationBalanceSOL,
+            )
+          : baseParams;
 
       final result = await _repo.sendMessage(
         message: text.trim(),

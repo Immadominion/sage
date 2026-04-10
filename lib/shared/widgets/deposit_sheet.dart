@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,20 +9,22 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import 'package:sage/core/config/env_config.dart';
 import 'package:sage/core/repositories/wallet_repository.dart';
+import 'package:sage/core/services/auth_service.dart';
 import 'package:sage/core/services/mwa_wallet_service.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
 
-/// Deposit SOL into the Seal wallet from the user's connected wallet.
+/// Deposit SOL into a bot's wallet from the user's connected wallet.
 ///
-/// Self-contained widget (like [WithdrawSheet]) — handles its own
-/// loading/success/error state.
+/// The backend builds a system transfer TX (user → bot wallet address),
+/// which the user signs via MWA. No server-side key access needed.
 ///
 /// ```dart
 /// SageBottomSheet.show<bool>(
 ///   context: context,
 ///   title: 'Fund Wallet',
 ///   builder: (c, text) => DepositSheet(
+///     botId: bot.botId,
 ///     recommendedSol: 5.0,
 ///     minSol: 1.0,
 ///     c: c,
@@ -30,6 +33,9 @@ import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
 /// );
 /// ```
 class DepositSheet extends ConsumerStatefulWidget {
+  /// The bot whose wallet will receive the deposit.
+  final String botId;
+
   /// Recommended deposit amount (e.g. positionSize * maxPositions).
   final double recommendedSol;
 
@@ -44,6 +50,7 @@ class DepositSheet extends ConsumerStatefulWidget {
 
   const DepositSheet({
     super.key,
+    required this.botId,
     this.recommendedSol = 1.0,
     this.minSol = 0.1,
     this.maxSol,
@@ -78,42 +85,33 @@ class _DepositSheetState extends ConsumerState<DepositSheet> {
     try {
       final walletRepo = ref.read(walletRepositoryProvider);
       final mwa = ref.read(mwaWalletServiceProvider);
+      final feePayer = ref.read(connectedWalletAddressProvider);
 
-      final txData = await walletRepo.prepareDeposit(amountSol: _amount);
+      if (feePayer == null || feePayer.isEmpty) {
+        throw Exception('Wallet not connected. Please reconnect your wallet.');
+      }
+
+      // Step 1: Backend builds a system transfer TX (user → bot wallet).
+      final txData = await walletRepo.prepareDeposit(
+        botId: widget.botId,
+        amountSOL: _amount,
+        feePayer: feePayer,
+      );
       final network = txData['network'] as String? ?? EnvConfig.solanaNetwork;
       final txBytes = Uint8List.fromList(
         base64Decode(txData['transaction'] as String),
       );
 
-      // Try signAndSend first, fall back to sign + backend submit
-      try {
-        final signatures = await mwa.signAndSendTransactions([
-          txBytes,
-        ], cluster: network);
-        if (signatures.isEmpty) {
-          throw Exception('Transaction was rejected');
-        }
-      } catch (e) {
-        final msg = e.toString();
-        final isSimErr =
-            msg.contains('simulation') ||
-            msg.contains('Simulation') ||
-            msg.contains('Transaction failed') ||
-            msg.contains('failed to send');
-        if (!isSimErr) rethrow;
-
-        debugPrint('[Deposit] signAndSend failed, trying sign + submit');
-        final signedTxs = await mwa.signTransactions([
-          txBytes,
-        ], cluster: network);
-        if (signedTxs.isEmpty) throw Exception('Signing cancelled');
-
-        final txBase64 = base64Encode(signedTxs.first);
-        await walletRepo.submitSigned(transactionBase64: txBase64);
+      // Step 2: Sign and send via MWA.
+      final signatures = await mwa.signAndSendTransactions([
+        txBytes,
+      ], cluster: network);
+      if (signatures.isEmpty) {
+        throw Exception('Transaction was rejected by wallet');
       }
 
       _depositedSol = _amount;
-      ref.invalidate(walletBalanceProvider);
+      ref.invalidate(walletBalanceProvider(widget.botId));
 
       if (mounted) {
         setState(() => _state = _DepositState.success);
@@ -138,8 +136,11 @@ class _DepositSheetState extends ConsumerState<DepositSheet> {
     if (msg.contains('insufficient') || msg.contains('Insufficient')) {
       return 'Insufficient balance in your connected wallet.';
     }
-    if (msg.contains('Wallet not found')) {
-      return 'Seal wallet not found. Create one first.';
+    if (msg.contains('Wallet not found') || msg.contains('Bot not found')) {
+      return 'Bot wallet not found. The bot may have been deleted.';
+    }
+    if (msg.contains('Only live-mode') || msg.contains('not initialized')) {
+      return 'This bot does not have a wallet yet.';
     }
     if (msg.contains('rejected')) {
       return 'Transaction was rejected by your wallet.';
@@ -190,7 +191,7 @@ class _DepositSheetState extends ConsumerState<DepositSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Add SOL to your Seal wallet for live trading.',
+          'Add SOL to your bot wallet for live trading.',
           style: text.bodyMedium?.copyWith(color: c.textSecondary),
         ),
 
@@ -321,7 +322,7 @@ class _DepositSheetState extends ConsumerState<DepositSheet> {
             ),
             SizedBox(height: 8.h),
             Text(
-              'Sending ${_amount.toStringAsFixed(1)} SOL to your Seal wallet',
+              'Sending ${_amount.toStringAsFixed(1)} SOL to your bot wallet',
               style: text.bodySmall?.copyWith(color: c.textTertiary),
             ),
           ],
@@ -368,7 +369,7 @@ class _DepositSheetState extends ConsumerState<DepositSheet> {
         SizedBox(height: 8.h),
 
         Text(
-          '${(_depositedSol ?? _amount).toStringAsFixed(1)} SOL added to your Seal wallet',
+          '${(_depositedSol ?? _amount).toStringAsFixed(1)} SOL added to your bot wallet',
           style: text.bodyMedium?.copyWith(color: c.textSecondary),
         ),
 

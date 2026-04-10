@@ -75,17 +75,35 @@ final botListProvider = AsyncNotifierProvider<BotListNotifier, List<Bot>>(() {
 });
 
 class BotListNotifier extends AsyncNotifier<List<Bot>> {
+  Future<void>? _refreshInFlight;
+
   @override
   Future<List<Bot>> build() async {
     final repo = ref.read(botRepositoryProvider);
     return repo.listBots();
   }
 
-  Future<void> refresh() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(
-      () => ref.read(botRepositoryProvider).listBots(),
-    );
+  Future<void> refresh({bool showLoading = false}) async {
+    if (_refreshInFlight != null) {
+      await _refreshInFlight;
+      return;
+    }
+
+    if (showLoading || !state.hasValue) {
+      state = const AsyncValue.loading();
+    }
+
+    final future =
+        AsyncValue.guard(() => ref.read(botRepositoryProvider).listBots())
+            .then((next) {
+              state = next;
+            })
+            .whenComplete(() {
+              _refreshInFlight = null;
+            });
+
+    _refreshInFlight = future;
+    await future;
   }
 
   Future<Bot> createBot(BotConfig config) async {

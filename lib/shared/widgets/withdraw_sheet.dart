@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,14 +7,12 @@ import 'package:rive/rive.dart';
 
 import 'package:sage/core/repositories/wallet_repository.dart';
 import 'package:sage/core/services/auth_service.dart';
-import 'package:sage/core/services/mwa_wallet_service.dart';
 import 'package:sage/core/theme/app_colors.dart';
 
 /// Withdraw SOL from Sage bot wallets back to user's wallet.
 ///
-/// Smart withdrawal — drains session signer balances AND the wallet
-/// PDA in a single transaction. One tap, one MWA signature, all
-/// funds returned to the user's Phantom wallet.
+/// The backend decrypts the bot's server-side keypair and signs
+/// the transfer — no MWA signature required from the user.
 ///
 /// Designed for use inside [SageBottomSheet.show()].
 /// Handles its own loading/success/error state.
@@ -26,6 +22,7 @@ import 'package:sage/core/theme/app_colors.dart';
 ///   context: context,
 ///   title: 'Withdraw',
 ///   builder: (c, text) => WithdrawSheet(
+///     botId: bot.botId,
 ///     availableBalanceSol: balance,
 ///     c: c,
 ///     text: text,
@@ -33,12 +30,14 @@ import 'package:sage/core/theme/app_colors.dart';
 /// );
 /// ```
 class WithdrawSheet extends ConsumerStatefulWidget {
+  final String botId;
   final double availableBalanceSol;
   final SageColors c;
   final TextTheme text;
 
   const WithdrawSheet({
     super.key,
+    required this.botId,
     required this.availableBalanceSol,
     required this.c,
     required this.text,
@@ -58,9 +57,9 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
 
   String get _connectedWallet => ref.read(connectedWalletAddressProvider) ?? '';
 
-  /// Withdraw SOL from session signers back to the user's wallet.
-  /// Backend builds + partially signs the TX (session keys), then the
-  /// owner signs via MWA (as feePayer) and the backend submits.
+  /// Withdraw SOL from bot wallet back to the user's connected wallet.
+  /// In the new per-bot model, the backend decrypts the bot keypair and
+  /// signs the transfer server-side — no MWA signature needed.
   Future<void> _executeWithdraw() async {
     if (_connectedWallet.isEmpty) {
       setState(() {
@@ -75,34 +74,22 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
 
     try {
       final walletRepo = ref.read(walletRepositoryProvider);
-      final mwa = ref.read(mwaWalletServiceProvider);
 
-      // Step 1: Backend prepares TX draining session signers + wallet PDA
-      final withdrawal = await walletRepo.prepareWithdraw();
-      final txBase64 = withdrawal['transaction'] as String;
-      final network = (withdrawal['network'] as String?) ?? 'mainnet-beta';
-      final closesWallet = withdrawal['closesWallet'] == true;
-      _withdrawnSol =
-          (withdrawal['withdrawSol'] as num?)?.toDouble() ??
-          widget.availableBalanceSol;
-
-      // Step 2: Sign via MWA (owner is feePayer)
-      final signedTxs = await mwa.signTransactions([
-        Uint8List.fromList(base64Decode(txBase64)),
-      ], cluster: network);
-
-      if (signedTxs.isEmpty) {
-        throw Exception('Transaction signing was cancelled');
-      }
-
-      // Step 3: Submit — if wallet PDA was closed, tell backend to clean up DB
-      final result = await walletRepo.submitSigned(
-        transactionBase64: base64Encode(signedTxs.first),
-        recoverWalletClose: closesWallet,
+      // Backend decrypts the bot keypair, signs, and sends the transfer.
+      final result = await walletRepo.withdraw(
+        widget.botId,
+        widget.availableBalanceSol,
       );
 
-      _signature = result['signature'] as String?;
-      ref.invalidate(walletBalanceProvider);
+      if (!result.success) {
+        throw Exception(result.error ?? 'Withdrawal failed');
+      }
+
+      _signature = result.signature;
+      _withdrawnSol = widget.availableBalanceSol;
+
+      // Refresh the bot's wallet balance.
+      ref.invalidate(walletBalanceProvider(widget.botId));
 
       if (mounted) {
         setState(() => _state = _SheetState.success);
@@ -125,14 +112,21 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
         msg.contains('No session signer funds')) {
       return 'No funds available to withdraw.';
     }
+    if (msg.contains('Insufficient balance') ||
+        msg.contains('InsufficientFunds')) {
+      return 'Insufficient balance for withdrawal + transaction fees.';
+    }
+    if (msg.contains('Bot not found') || msg.contains('404')) {
+      return 'Bot wallet not found. It may have been deleted.';
+    }
+    if (msg.contains('Only live-mode') || msg.contains('not initialized')) {
+      return 'This bot does not have a wallet yet.';
+    }
     if (msg.contains('Wallet not found')) {
       return 'No on-chain wallet found. It may already be closed.';
     }
     if (msg.contains('signing was cancelled')) {
       return 'You cancelled the transaction. No funds were moved.';
-    }
-    if (msg.contains('InsufficientFunds')) {
-      return 'Not enough SOL for transaction fees. Make sure your Phantom wallet has some SOL.';
     }
     // Generic
     final match = RegExp(r'message:\s*(.+)').firstMatch(msg);

@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:sage/core/config/live_trading_flags.dart';
+import 'package:sage/core/config/simulation_defaults.dart';
 import 'package:sage/core/models/bot.dart';
 import 'package:sage/core/models/strategy.dart';
 import 'package:sage/core/repositories/bot_repository.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/core/theme/app_theme.dart';
 import 'package:sage/core/utils/bot_validators.dart';
+import 'package:sage/features/setup/models/risk_profile.dart';
 
 import 'package:sage/features/automate/presentation/widgets/bot_form_fields.dart';
 import 'package:sage/features/automate/presentation/widgets/strategy_preset_selector.dart';
@@ -44,24 +47,25 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
   final _nameController = TextEditingController(text: 'My Bot');
   BotMode _mode = BotMode.simulation;
   StrategyMode _strategyMode = StrategyMode.ruleBased;
-  double _positionSize = 1.0;
-  double _entryThreshold = 150;
-  int _maxConcurrent = 5;
+  double _positionSize = kDefaultRiskConfig.positionSizeSOL;
+  double _simulationBalanceSol = kDefaultSimulationBalanceSOL;
+  double _entryThreshold = kDefaultRiskConfig.entryScoreThreshold;
+  int _maxConcurrent = kDefaultRiskConfig.maxConcurrentPositions;
   bool _isCreating = false;
 
   // Strategy preset state
   StrategyPreset? _selectedPreset;
 
   // Hidden config values (populated by preset or defaults)
-  double _minVolume24h = 1000;
-  double _minLiquidity = 5000;
-  double _maxLiquidity = 500000;
-  int _defaultBinRange = 10;
-  double _profitTargetPercent = 5.0;
-  double _stopLossPercent = 3.0;
-  int _maxHoldTimeMinutes = 120;
-  double _maxDailyLossSOL = 5.0;
-  int _cooldownMinutes = 79;
+  double _minVolume24h = kDefaultCustomEntry.minVolume24h;
+  double _minLiquidity = kDefaultCustomEntry.minLiquidity;
+  double _maxLiquidity = kDefaultCustomEntry.maxLiquidity;
+  int _defaultBinRange = kDefaultCustomEntry.defaultBinRange;
+  double _profitTargetPercent = kDefaultRiskConfig.profitTargetPercent;
+  double _stopLossPercent = kDefaultRiskConfig.stopLossPercent;
+  int _maxHoldTimeMinutes = kDefaultRiskConfig.maxHoldTimeMinutes;
+  double _maxDailyLossSOL = kDefaultRiskConfig.maxDailyLossSOL;
+  int _cooldownMinutes = kDefaultCustomEntry.cooldownMinutes;
 
   @override
   void dispose() {
@@ -74,6 +78,10 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
     setState(() {
       _selectedPreset = preset;
       _positionSize = preset.positionSizeSOL;
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: _simulationBalanceSol,
+        positionSizeSOL: preset.positionSizeSOL,
+      );
       _entryThreshold = preset.entryScoreThreshold;
       _maxConcurrent = preset.maxConcurrentPositions;
       _minVolume24h = preset.minVolume24h;
@@ -89,14 +97,51 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
     HapticFeedback.selectionClick();
   }
 
+  void _setPositionSize(double value) {
+    setState(() {
+      _positionSize = value;
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: _simulationBalanceSol,
+        positionSizeSOL: value,
+      );
+    });
+  }
+
+  void _setSimulationBalance(double value) {
+    setState(() {
+      final newBalance = normalizeSimulationBalanceSOL(value);
+      // If position size is now too large for the bankroll, shrink it.
+      if (_positionSize >= newBalance) {
+        _positionSize = _round2((newBalance * 0.5).clamp(0.05, _positionSize));
+      }
+      // Same for daily loss — cap at bankroll.
+      if (_maxDailyLossSOL > newBalance) {
+        _maxDailyLossSOL = _round2(newBalance * 0.8);
+      }
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: newBalance,
+        positionSizeSOL: _positionSize,
+      );
+    });
+  }
+
   /// Clear preset selection — keeps current values for manual editing.
   void _clearPreset() {
     setState(() => _selectedPreset = null);
     HapticFeedback.selectionClick();
   }
 
+  static double _round2(double v) => (v * 100).roundToDouble() / 100;
+
   Future<void> _createBot() async {
     if (_isCreating) return;
+
+    if (_mode == BotMode.live && !kLiveTradingEnabled) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(kLiveTradingDisabledReason)));
+      return;
+    }
 
     final name = _nameController.text.trim();
     final nameError = BotValidators.name(name);
@@ -203,7 +248,7 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
           'maxDailyLossSOL': _maxDailyLossSOL,
           'cooldownMinutes': _cooldownMinutes,
           'cronIntervalSeconds': 30,
-          'simulationBalanceSOL': 20.0,
+          'simulationBalanceSOL': _simulationBalanceSol,
           if (_selectedPreset != null) 'strategyPresetId': _selectedPreset!.id,
         },
       );
@@ -293,10 +338,29 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
                   BotMode.simulation: 'Simulation',
                   BotMode.live: 'Live',
                 },
-                onChanged: (v) => setState(() => _mode = v),
+                onChanged: (v) {
+                  if (v == BotMode.live && !kLiveTradingEnabled) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(kLiveTradingDisabledReason)),
+                    );
+                    return;
+                  }
+                  setState(() => _mode = v);
+                },
                 c: c,
                 text: text,
               ),
+              if (!kLiveTradingEnabled)
+                Padding(
+                  padding: EdgeInsets.only(top: 6.h),
+                  child: Text(
+                    kLiveTradingDisabledReason,
+                    style: text.bodySmall?.copyWith(
+                      color: c.textTertiary,
+                      fontSize: 11.sp,
+                    ),
+                  ),
+                ),
 
               SizedBox(height: 20.h),
 
@@ -364,10 +428,40 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
                 divisions: 99,
                 unit: 'SOL',
                 format: (v) => v.toStringAsFixed(1),
-                onChanged: (v) => setState(() => _positionSize = v),
+                onChanged: _setPositionSize,
                 c: c,
                 text: text,
               ),
+
+              if (_mode == BotMode.simulation) ...[
+                SizedBox(height: 20.h),
+                SectionLabel(label: 'SIMULATION CAPITAL', c: c, text: text),
+                SizedBox(height: 8.h),
+                SliderRow(
+                  value: _simulationBalanceSol,
+                  min: minimumSimulationBalanceSOL(_positionSize),
+                  max: kMaxSimulationBalanceSOL,
+                  divisions:
+                      ((kMaxSimulationBalanceSOL -
+                                  minimumSimulationBalanceSOL(_positionSize)) *
+                              10)
+                          .round()
+                          .clamp(1, 998),
+                  unit: 'SOL',
+                  format: (v) => v.toStringAsFixed(1),
+                  onChanged: _setSimulationBalance,
+                  c: c,
+                  text: text,
+                ),
+                SizedBox(height: 6.h),
+                Text(
+                  'Virtual capital only. Uses real market data, no on-chain execution.',
+                  style: text.bodySmall?.copyWith(
+                    color: c.textSecondary,
+                    fontSize: 11.sp,
+                  ),
+                ),
+              ],
 
               SizedBox(height: 20.h),
 

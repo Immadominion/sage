@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -11,13 +9,11 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:sage/core/models/bot.dart';
-import 'package:sage/core/config/env_config.dart';
+import 'package:sage/core/config/live_trading_flags.dart';
 import 'package:sage/core/models/bot_event.dart';
 import 'package:sage/core/repositories/bot_repository.dart';
 import 'package:sage/core/repositories/wallet_repository.dart';
 import 'package:sage/core/services/event_service.dart';
-import 'package:sage/core/services/mwa_wallet_service.dart';
-import 'package:sage/core/services/seal_agent_service.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/core/theme/app_theme.dart';
 
@@ -75,6 +71,12 @@ String _friendlyLastError(String error) {
         '(Current: $balance SOL, needs: $required SOL)';
   }
   return error;
+}
+
+void _showLiveTradingUnavailableSnackBar(BuildContext context) {
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(kLiveTradingDisabledReason)));
 }
 
 /// Fully wired to real data via [botDetailProvider].
@@ -221,17 +223,15 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
 
     setState(() => _isPerformingAction = true);
     try {
-      // Clean up stored Seal agent/session keys
-      final agentService = ref.read(sealAgentServiceProvider);
-      await agentService.deleteKeysForBot(widget.botId);
-
       await ref.read(botListProvider.notifier).deleteBot(widget.botId);
       HapticFeedback.mediumImpact();
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Bot deleted')));
-        Navigator.of(context).pop();
+        // Use go('/') — context.pop() may have nothing to pop to if the user
+        // arrived here via context.go() (e.g. from setup screen).
+        context.go('/');
       }
     } catch (e) {
       if (mounted) {
@@ -282,67 +282,16 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       final repo = ref.read(botRepositoryProvider);
       final botData = ref.read(botDetailProvider(widget.botId)).value;
 
-      // ── Pre-check: if this is a live bot with no agent keys, skip
-      //    straight to setup-live instead of making a doomed API call.
-      final needsSetupPreCheck =
-          botData != null &&
-          botData.mode == BotMode.live &&
-          botData.agentPubkey == null;
-
-      if (!needsSetupPreCheck) {
-        // Try starting directly — the backend knows if setup is valid
-        try {
-          await repo.startBot(widget.botId);
-          HapticFeedback.mediumImpact();
-          ref.invalidate(botDetailProvider(widget.botId));
-          ref.invalidate(botListProvider);
-          return;
-        } catch (startErr) {
-          // Extract the actual API message from DioException.response.data,
-          // not toString() which omits the response body.
-          final msg = _apiError(startErr);
-          final needsSetup =
-              msg.contains('wallet setup') ||
-              msg.contains('session setup') ||
-              msg.contains('Live mode requires');
-          if (!needsSetup) rethrow;
-        }
+      if (botData?.mode == BotMode.live && !kLiveTradingEnabled) {
+        _showLiveTradingUnavailableSnackBar(context);
+        return;
       }
 
-      // Live-mode bot needs setup-live → build TX + sign via MWA
-      if (botData != null && botData.mode == BotMode.live) {
-        try {
-          await _runSetupLive(botData);
-        } catch (e) {
-          final msg = e.toString();
-          final isAlreadyConfigured =
-              msg.contains('409') || msg.contains('already has agent');
-          if (!isAlreadyConfigured) {
-            // Setup failed (signing rejected / simulation error).
-            // Do NOT proceed to startBot — the on-chain accounts don't exist.
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Setup failed: ${_apiError(e)}')),
-              );
-            }
-            return;
-          }
-        }
-        // Retry startBot with backoff — finalizeLiveSession may still be running
-        for (var attempt = 0; attempt < 3; attempt++) {
-          try {
-            await repo.startBot(widget.botId);
-            HapticFeedback.mediumImpact();
-            ref.invalidate(botDetailProvider(widget.botId));
-            ref.invalidate(botListProvider);
-            ref.invalidate(walletBalanceProvider);
-            return;
-          } catch (e) {
-            if (attempt == 2) rethrow;
-            await Future.delayed(Duration(milliseconds: 1000 * (attempt + 1)));
-          }
-        }
-      }
+      // Try starting directly — the backend knows if setup is valid
+      await repo.startBot(widget.botId);
+      HapticFeedback.mediumImpact();
+      ref.invalidate(botDetailProvider(widget.botId));
+      ref.read(botListProvider.notifier).refresh();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -354,89 +303,6 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
     }
   }
 
-  /// Run setup-live for a live bot that's missing agent + session keys.
-  /// Calls the backend to generate keypairs + build TX, then signs via MWA.
-  Future<void> _runSetupLive(Bot bot) async {
-    final walletRepo = ref.read(walletRepositoryProvider);
-    final mwa = ref.read(mwaWalletServiceProvider);
-
-    // Ensure Seal wallet exists on-chain (may have been closed/recovered)
-    final walletState = await walletRepo.getWalletState();
-    if (!walletState.exists) {
-      try {
-        final txData = await walletRepo.prepareCreate(
-          dailyLimitSol: bot.maxDailyLossSOL,
-          perTxLimitSol: bot.positionSizeSOL,
-        );
-        final network =
-            (txData['network'] as String?) ?? EnvConfig.solanaNetwork;
-        final txBytes = Uint8List.fromList(
-          base64Decode(txData['transaction'] as String),
-        );
-        final signedTxs = await mwa.signTransactions([
-          txBytes,
-        ], cluster: network);
-        if (signedTxs.isEmpty) {
-          throw Exception('Wallet creation signing was cancelled');
-        }
-        final txBase64 = base64Encode(signedTxs.first);
-        await walletRepo.submitSigned(transactionBase64: txBase64);
-      } catch (e) {
-        final msg = e.toString();
-        if (!msg.contains('409') && !msg.contains('already exists')) rethrow;
-      }
-    }
-
-    // Include a deposit so the bot has trading capital.
-    // positionSize * 2 covers one trade + fees; user can top up via Fund Wallet.
-    final depositSol = bot.positionSizeSOL * 2;
-
-    final setupData = await walletRepo.setupLive(
-      botId: bot.botId,
-      depositSol: depositSol,
-      dailyLimitSol: bot.maxDailyLossSOL,
-      perTxLimitSol: bot.positionSizeSOL,
-      sessionMaxAmountSol: bot.maxDailyLossSOL * 30,
-      sessionMaxPerTxSol: bot.positionSizeSOL * 2,
-    );
-
-    // If already finalized (409 with finalized: true), skip signing
-    if (setupData['finalized'] == true) return;
-
-    final txBase64 = setupData['transaction'] as String;
-    final txBytes = Uint8List.fromList(base64Decode(txBase64));
-    final network =
-        (setupData['network'] as String?) ?? EnvConfig.solanaNetwork;
-
-    final signedTxs = await mwa.signTransactions([txBytes], cluster: network);
-    if (signedTxs.isEmpty) {
-      throw Exception('Transaction signing was cancelled');
-    }
-
-    final signed64 = base64Encode(signedTxs.first);
-    await walletRepo.submitSigned(
-      transactionBase64: signed64,
-      setupLiveBotId: bot.botId,
-    );
-
-    // Refresh wallet balance immediately + delayed second refresh.
-    ref.invalidate(walletBalanceProvider);
-    Future.delayed(const Duration(seconds: 3), () {
-      try {
-        ref.invalidate(walletBalanceProvider);
-      } catch (_) {}
-    });
-
-    // Wait for backend's finalizeLiveSession to populate agent/session keys.
-    // Poll up to 5s — the on-chain confirmation + DB write typically takes 1-3s.
-    for (var i = 0; i < 10; i++) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      ref.invalidate(botDetailProvider(widget.botId));
-      final refreshed = await ref.read(botDetailProvider(widget.botId).future);
-      if (refreshed.agentPubkey != null) return;
-    }
-  }
-
   Future<void> _stopBot() async {
     if (_isPerformingAction) return;
     setState(() => _isPerformingAction = true);
@@ -445,7 +311,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       await repo.stopBot(widget.botId);
       HapticFeedback.mediumImpact();
       ref.invalidate(botDetailProvider(widget.botId));
-      ref.invalidate(botListProvider);
+      ref.read(botListProvider.notifier).refresh();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -648,7 +514,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       await repo.emergencyStop(widget.botId);
       HapticFeedback.heavyImpact();
       ref.invalidate(botDetailProvider(widget.botId));
-      ref.invalidate(botListProvider);
+      ref.read(botListProvider.notifier).refresh();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -671,12 +537,18 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       return;
     }
 
+    if (!kLiveTradingEnabled) {
+      _showLiveTradingUnavailableSnackBar(context);
+      return;
+    }
+
     final recommended = bot.positionSizeSOL * bot.maxConcurrentPositions;
 
     final success = await SageBottomSheet.show<bool>(
       context: context,
       title: 'Fund Wallet',
       builder: (c, text) => DepositSheet(
+        botId: widget.botId,
         recommendedSol: recommended,
         minSol: bot.positionSizeSOL,
         c: c,
@@ -685,19 +557,24 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
     );
 
     if (success == true && mounted) {
-      ref.invalidate(walletBalanceProvider);
+      ref.invalidate(walletBalanceProvider(widget.botId));
       ref.invalidate(botDetailProvider(widget.botId));
     }
   }
 
   /// Show withdraw bottom sheet — pull SOL from Sage wallet back to user.
   Future<void> _showWithdrawSheet() async {
+    if (!kLiveTradingEnabled) {
+      _showLiveTradingUnavailableSnackBar(context);
+      return;
+    }
+
     final walletRepo = ref.read(walletRepositoryProvider);
 
-    // Get current balance
+    // Get current balance for this bot's wallet
     double balance;
     try {
-      final wb = await walletRepo.getBalance();
+      final wb = await walletRepo.getBalance(widget.botId);
       balance = wb.balanceSOL;
     } catch (_) {
       if (mounted) {
@@ -721,12 +598,16 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
     final success = await SageBottomSheet.show<bool>(
       context: context,
       title: 'Withdraw',
-      builder: (c, text) =>
-          WithdrawSheet(availableBalanceSol: balance, c: c, text: text),
+      builder: (c, text) => WithdrawSheet(
+        botId: widget.botId,
+        availableBalanceSol: balance,
+        c: c,
+        text: text,
+      ),
     );
 
     if (success == true && mounted) {
-      ref.invalidate(walletBalanceProvider);
+      ref.invalidate(walletBalanceProvider(widget.botId));
       ref.invalidate(botDetailProvider(widget.botId));
     }
   }
@@ -749,7 +630,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
             event.isPositionClosed ||
             event.isScanCompleted) {
           ref.invalidate(botDetailProvider(widget.botId));
-          ref.invalidate(botListProvider);
+          ref.read(botListProvider.notifier).refresh();
         }
 
         // Start/stop polling alongside engine lifecycle
@@ -799,15 +680,22 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       _stopPolling();
     }
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: c.background,
-        body: botAsync.when(
-          loading: () =>
-              Center(child: CircularProgressIndicator(color: c.accent)),
-          error: (err, _) => _buildError(c, text, err),
-          data: (bot) => _buildBody(context, c, text, bot),
+    return PopScope(
+      canPop: Navigator.of(context).canPop(),
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) context.go('/');
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: Scaffold(
+          backgroundColor: c.background,
+          body: botAsync.when(
+            skipLoadingOnReload: true,
+            loading: () =>
+                Center(child: CircularProgressIndicator(color: c.accent)),
+            error: (err, _) => _buildError(c, text, err),
+            data: (bot) => _buildBody(context, c, text, bot),
+          ),
         ),
       ),
     );
@@ -893,11 +781,22 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
     final totalScans = stats?.totalScans ?? 0;
     final posOpened = stats?.positionsOpened ?? 0;
     final posClosed = stats?.positionsClosed ?? 0;
+    final waitingForMlEntry =
+        bot.engineRunning &&
+        bot.strategyMode == StrategyMode.sageAi &&
+        posOpened == 0 &&
+        totalScans > 0 &&
+        bot.lastError == null;
+    final mlThresholdLabel = bot.mlThreshold != null
+        ? bot.mlThreshold!.toStringAsFixed(4)
+        : 'model default';
 
     return RefreshIndicator(
       onRefresh: () async {
         ref.invalidate(botDetailProvider(widget.botId));
-        await Future.delayed(const Duration(milliseconds: 600));
+        // Give the provider time to re-fetch so the indicator doesn't
+        // vanish instantly.
+        await Future.delayed(const Duration(milliseconds: 500));
       },
       color: c.accent,
       backgroundColor: c.surface,
@@ -909,7 +808,13 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
+                  onTap: () {
+                    if (Navigator.of(context).canPop()) {
+                      context.pop();
+                    } else {
+                      context.go('/');
+                    }
+                  },
                   child: Container(
                     padding: EdgeInsets.all(8.w),
                     decoration: BoxDecoration(
@@ -1044,7 +949,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                           ],
                         ),
                       ),
-                      if (isLiveBot)
+                      if (isLiveBot && kLiveTradingEnabled)
                         PopupMenuItem(
                           value: 'fund',
                           child: Row(
@@ -1062,7 +967,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                             ],
                           ),
                         ),
-                      if (isLiveBot)
+                      if (isLiveBot && kLiveTradingEnabled)
                         PopupMenuItem(
                           value: 'withdraw',
                           child: Row(
@@ -1174,61 +1079,38 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                   // Shown when a live bot has no agent/session keys —
                   // the signing step was interrupted during creation.
                   if (bot.mode == BotMode.live &&
-                      bot.agentPubkey == null &&
+                      !kLiveTradingEnabled &&
                       !isRunning) ...[
                     SizedBox(height: 16.h),
-                    MWAButtonTapEffect(
-                      onTap: _startBot,
-                      child: Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12.w,
-                          vertical: 8.h,
-                        ),
-                        decoration: BoxDecoration(
-                          color: c.accent.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12.r),
-                          border: Border.all(
-                            color: c.accent.withValues(alpha: 0.3),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12.w,
+                        vertical: 10.h,
+                      ),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(color: c.borderSubtle),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            PhosphorIconsBold.info,
+                            size: 18.sp,
+                            color: c.textSecondary,
                           ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              PhosphorIconsBold.warning,
-                              size: 20.sp,
-                              color: c.accent,
-                            ),
-                            SizedBox(width: 12.w),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Wallet setup required',
-                                    style: text.bodyMedium?.copyWith(
-                                      color: c.accent,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  SizedBox(height: 2.h),
-                                  Text(
-                                    'Tap to sign and complete setup',
-                                    style: text.bodySmall?.copyWith(
-                                      color: c.accent.withValues(alpha: 0.7),
-                                      fontSize: 12.sp,
-                                    ),
-                                  ),
-                                ],
+                          SizedBox(width: 10.w),
+                          Expanded(
+                            child: Text(
+                              kLiveTradingDisabledReason,
+                              style: text.bodySmall?.copyWith(
+                                color: c.textSecondary,
+                                fontSize: 12.sp,
                               ),
                             ),
-                            Icon(
-                              PhosphorIconsBold.caretRight,
-                              size: 18.sp,
-                              color: c.accent.withValues(alpha: 0.6),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -1367,6 +1249,11 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                     label: 'Entry Threshold',
                     value: '${bot.entryScoreThreshold.toStringAsFixed(0)}%',
                   ),
+                  if (bot.strategyMode == StrategyMode.sageAi ||
+                      bot.strategyMode == StrategyMode.both) ...[
+                    Divider(height: 1, color: c.borderSubtle),
+                    ParamRow(label: 'ML Threshold', value: mlThresholdLabel),
+                  ],
                   Divider(height: 1, color: c.borderSubtle),
                   ParamRow(
                     label: 'Position Size',
@@ -1402,6 +1289,29 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                     label: 'Scan Interval',
                     value: '${bot.cronIntervalSeconds}s',
                   ),
+
+                  if (waitingForMlEntry) ...[
+                    SizedBox(height: 24.h),
+                    Text(
+                      'LATEST NOTE',
+                      style: text.titleSmall?.copyWith(
+                        fontSize: 10.sp,
+                        color: c.textSecondary,
+                      ),
+                    ),
+                    SizedBox(height: 8.h),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(12.w),
+                      child: Text(
+                        'Sage AI is scanning normally, but no pool has cleared the $mlThresholdLabel ML threshold yet. The bot will stay in cash until a stronger setup appears.',
+                        style: text.bodySmall?.copyWith(
+                          color: c.textSecondary,
+                          fontSize: 12.sp,
+                        ),
+                      ),
+                    ),
+                  ],
 
                   if (bot.lastError != null &&
                       bot.status != BotStatus.running) ...[
@@ -1440,11 +1350,30 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                   ],
 
                   // ── Seal Session Status (live mode only) ──
-                  if (bot.mode == BotMode.live) ...[
+                  if (bot.mode == BotMode.live && !kLiveTradingEnabled) ...[
+                    SizedBox(height: 28.h),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(14.w),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(color: c.borderSubtle),
+                      ),
+                      child: Text(
+                        'Live wallet details will appear here when live trading is enabled.',
+                        style: text.bodySmall?.copyWith(
+                          color: c.textSecondary,
+                          fontSize: 12.sp,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ] else if (bot.mode == BotMode.live) ...[
                     SizedBox(height: 28.h),
                     _SealStatusBanner(bot: bot),
                     SizedBox(height: 14.h),
-                    _WalletBalanceRow(),
+                    _WalletBalanceRow(botId: bot.botId),
                   ],
                 ],
               ),
@@ -1462,7 +1391,9 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
 
 /// Lightweight read-only banner showing Seal session status for live bots.
 /// Agent + session are now auto-created during bot deployment — no manual
-/// registration needed.
+/// Placeholder — Seal-era wallet status banner.
+/// Retained as a structural stub behind kLiveTradingEnabled gate.
+/// Will be replaced with per-bot keypair wallet status when live trading is re-enabled.
 class _SealStatusBanner extends StatelessWidget {
   final Bot bot;
 
@@ -1472,22 +1403,6 @@ class _SealStatusBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.sage;
     final text = context.sageText;
-
-    final hasSession = bot.sessionAddress != null;
-    final hasAgent = bot.agentPubkey != null;
-
-    // Distinguish "keys exist on-chain" from "engine is running".
-    // The engine status chip (Running / Stopped) is rendered separately.
-    final Color statusColor = hasSession
-        ? (bot.engineRunning ? c.profit : c.accent)
-        : hasAgent
-        ? c.accent
-        : c.textTertiary;
-    final String statusLabel = hasSession
-        ? (bot.engineRunning ? 'Live Active' : 'Live Ready')
-        : hasAgent
-        ? 'Wallet Ready'
-        : 'Tap Start to complete setup';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1502,54 +1417,24 @@ class _SealStatusBanner extends StatelessWidget {
           ),
         ),
         SizedBox(height: 8.h),
-
         Container(
           width: double.infinity,
           padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
           decoration: BoxDecoration(
-            color: statusColor.withValues(alpha: 0.08),
+            color: c.textTertiary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(4.r),
-            border: Border.all(color: statusColor.withValues(alpha: 0.25)),
+            border: Border.all(color: c.textTertiary.withValues(alpha: 0.25)),
           ),
-          child: Row(
-            children: [
-              Container(
-                width: 8.w,
-                height: 8.w,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: statusColor,
-                ),
-              ),
-              SizedBox(width: 10.w),
-              Expanded(
-                child: Text(
-                  statusLabel,
-                  style: text.bodyMedium?.copyWith(
-                    color: statusColor,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              if (hasAgent)
-                Text(
-                  _truncate(bot.agentPubkey!),
-                  style: text.bodySmall?.copyWith(
-                    color: c.textTertiary,
-                    fontFamily: 'monospace',
-                    fontSize: 11.sp,
-                  ),
-                ),
-            ],
+          child: Text(
+            'Wallet status unavailable',
+            style: text.bodyMedium?.copyWith(
+              color: c.textTertiary,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ],
     );
-  }
-
-  String _truncate(String addr) {
-    if (addr.length <= 12) return addr;
-    return '${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}';
   }
 }
 
@@ -1557,15 +1442,16 @@ class _SealStatusBanner extends StatelessWidget {
 // Wallet Balance Row (live bots only)
 // ═══════════════════════════════════════════════════════════════
 
-/// Shows the current Seal wallet SOL balance — flat inline row.
+/// Shows the bot wallet SOL balance — flat inline row.
 class _WalletBalanceRow extends ConsumerWidget {
-  const _WalletBalanceRow();
+  final String botId;
+  const _WalletBalanceRow({required this.botId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.sage;
     final text = context.sageText;
-    final balanceAsync = ref.watch(walletBalanceProvider);
+    final balanceAsync = ref.watch(walletBalanceProvider(botId));
 
     return Padding(
       padding: EdgeInsets.symmetric(vertical: 8.h),
@@ -1583,6 +1469,7 @@ class _WalletBalanceRow extends ConsumerWidget {
           ),
           const Spacer(),
           balanceAsync.when(
+            skipLoadingOnReload: true,
             loading: () => SizedBox(
               width: 14.sp,
               height: 14.sp,
@@ -1592,12 +1479,15 @@ class _WalletBalanceRow extends ConsumerWidget {
               ),
             ),
             error: (_, __) => GestureDetector(
-              onTap: () => ref.invalidate(walletBalanceProvider),
+              onTap: () => ref.invalidate(walletBalanceProvider(botId)),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(PhosphorIconsBold.arrowClockwise,
-                      size: 12.sp, color: c.textTertiary),
+                  Icon(
+                    PhosphorIconsBold.arrowClockwise,
+                    size: 12.sp,
+                    color: c.textTertiary,
+                  ),
                   SizedBox(width: 4.w),
                   Text(
                     'Tap to retry',

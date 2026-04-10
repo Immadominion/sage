@@ -72,6 +72,7 @@ class PositionDetailScreen extends ConsumerWidget {
 
             Expanded(
               child: posAsync.when(
+                skipLoadingOnReload: true,
                 loading: () =>
                     Center(child: CircularProgressIndicator(color: c.accent)),
                 error: (err, _) => Center(

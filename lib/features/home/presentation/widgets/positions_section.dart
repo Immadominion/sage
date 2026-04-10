@@ -28,6 +28,7 @@ class PositionsSection extends ConsumerWidget {
         ),
         SizedBox(height: 8.h),
         posAsync.when(
+          skipLoadingOnReload: true,
           loading: () => Padding(
             padding: EdgeInsets.symmetric(vertical: 20.h),
             child: Center(

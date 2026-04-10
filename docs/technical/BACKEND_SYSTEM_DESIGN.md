@@ -140,12 +140,12 @@ Mobile App                    Backend                         Solana
 ```typescript
 // Message format (SIWS standard)
 const message = [
-  `sage.app wants you to sign in with your Solana account:`,
+  `sage.scrolls.fun wants you to sign in with your Solana account:`,
   publicKey.toBase58(),
   ``,
   `Sign in to Sage`,
   ``,
-  `URI: https://sage.app`,
+  `URI: https://sage.scrolls.fun`,
   `Version: 1`,
   `Chain ID: mainnet`,
   `Nonce: ${nonce}`,
@@ -569,7 +569,7 @@ CREATE INDEX idx_trade_log_created ON trade_log(created_at);
 ### Connection
 
 ```
-wss://api.sage.app/ws?token=<jwt>
+wss://api.sage.scrolls.fun/ws?token=<jwt>
 ```
 
 ### Message Types (Server → Client)

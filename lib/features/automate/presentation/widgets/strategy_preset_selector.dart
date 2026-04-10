@@ -29,6 +29,7 @@ class StrategyPresetSelector extends ConsumerWidget {
     final presetsAsync = ref.watch(strategyPresetsProvider);
 
     return presetsAsync.when(
+      skipLoadingOnReload: true,
       loading: () => Container(
         padding: EdgeInsets.symmetric(vertical: 14.h),
         decoration: BoxDecoration(

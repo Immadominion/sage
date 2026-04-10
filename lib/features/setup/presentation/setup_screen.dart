@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,15 +7,14 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sage/core/models/bot.dart';
+import 'package:sage/core/config/live_trading_flags.dart';
 import 'package:sage/core/repositories/bot_repository.dart';
 import 'package:sage/core/services/api_client.dart';
 import 'package:sage/core/services/auth_service.dart';
 import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/core/theme/app_theme.dart';
 
-import 'package:sage/core/config/env_config.dart';
-import 'package:sage/core/repositories/wallet_repository.dart';
-import 'package:sage/core/services/mwa_wallet_service.dart';
+import 'package:sage/core/config/simulation_defaults.dart';
 import 'package:sage/core/services/chat_persistence.dart';
 import 'package:sage/features/setup/models/risk_profile.dart';
 import 'package:sage/features/setup/presentation/widgets/custom_strategy_step.dart';
@@ -25,6 +23,7 @@ import 'package:sage/features/setup/presentation/widgets/path_step.dart';
 import 'package:sage/features/setup/presentation/widgets/review_fund_step.dart';
 import 'package:sage/features/chat/models/chat_models.dart';
 import 'package:sage/features/chat/presentation/widgets/setup_chat_step.dart';
+import 'package:sage/features/chat/providers/chat_provider.dart';
 
 /// Setup Wizard — shown once after first wallet connection.
 ///
@@ -52,20 +51,21 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   final TextEditingController _nameController = TextEditingController();
 
   // ── Sage AI overrides ──
-  late double _positionSize = 1.0;
-  late double _dailyLimit = 3.0;
-  late double _profitTarget = 8.0;
-  late double _stopLoss = 6.0;
+  late double _positionSize = kDefaultRiskConfig.positionSizeSOL;
+  late double _simulationBalanceSol = kDefaultSimulationBalanceSOL;
+  late double _dailyLimit = kDefaultRiskConfig.maxDailyLossSOL;
+  late double _profitTarget = kDefaultRiskConfig.profitTargetPercent;
+  late double _stopLoss = kDefaultRiskConfig.stopLossPercent;
 
   // ── Custom strategy fields ──
-  double _entryScore = 150;
-  double _minVolume = 1000;
-  double _minLiquidity = 100;
-  double _maxLiquidity = 1000000;
-  int _maxConcurrent = 5;
-  int _binRange = 10;
-  int _maxHoldMinutes = 240;
-  int _cooldownMinutes = 79;
+  double _entryScore = kDefaultRiskConfig.entryScoreThreshold;
+  double _minVolume = kDefaultCustomEntry.minVolume24h;
+  double _minLiquidity = kDefaultCustomEntry.minLiquidity;
+  double _maxLiquidity = kDefaultCustomEntry.maxLiquidity;
+  int _maxConcurrent = kDefaultRiskConfig.maxConcurrentPositions;
+  int _binRange = kDefaultCustomEntry.defaultBinRange;
+  int _maxHoldMinutes = kDefaultRiskConfig.maxHoldTimeMinutes;
+  int _cooldownMinutes = kDefaultCustomEntry.cooldownMinutes;
 
   @override
   void initState() {
@@ -86,7 +86,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         _path = saved.path == 'sage-ai' ? SetupPath.sageAi : SetupPath.custom;
       }
       if (saved.execMode != null) {
-        _execMode = saved.execMode == 'live'
+        _execMode = saved.execMode == 'live' && kLiveTradingEnabled
             ? ExecutionMode.live
             : ExecutionMode.simulation;
       }
@@ -96,6 +96,12 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       if (saved.params != null) {
         _applyAiParams(saved.params!);
       }
+
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested:
+            saved.params?.simulationBalanceSOL ?? kDefaultSimulationBalanceSOL,
+        positionSizeSOL: _positionSize,
+      );
     });
   }
 
@@ -131,6 +137,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           minLiquidity: _minLiquidity,
           maxLiquidity: _maxLiquidity,
           positionSizeSOL: _positionSize,
+          simulationBalanceSOL: _simulationBalanceSol,
           maxConcurrentPositions: _maxConcurrent,
           defaultBinRange: _binRange,
           profitTargetPercent: _profitTarget,
@@ -151,13 +158,52 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   void _selectRisk(RiskProfile risk) {
     HapticFeedback.mediumImpact();
-    final cfg = riskConfigs[risk]!;
+    final cfg = configForBankroll(risk, _simulationBalanceSol);
     setState(() {
       _risk = risk;
       _positionSize = cfg.positionSizeSOL;
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: _simulationBalanceSol,
+        positionSizeSOL: cfg.positionSizeSOL,
+      );
       _dailyLimit = cfg.maxDailyLossSOL;
       _profitTarget = cfg.profitTargetPercent;
       _stopLoss = cfg.stopLossPercent;
+      _maxConcurrent = cfg.maxConcurrentPositions;
+    });
+    _persistSetupState();
+  }
+
+  void _setPositionSize(double value) {
+    setState(() {
+      _positionSize = value;
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: _simulationBalanceSol,
+        positionSizeSOL: value,
+      );
+    });
+    _persistSetupState();
+  }
+
+  void _setSimulationBalance(double value) {
+    setState(() {
+      if (_path == SetupPath.sageAi) {
+        // Bankroll-relative: re-derive config from the new balance.
+        final rawBalance = normalizeSimulationBalanceSOL(value);
+        final cfg = configForBankroll(_risk, rawBalance);
+        _positionSize = cfg.positionSizeSOL;
+        _dailyLimit = cfg.maxDailyLossSOL;
+        _maxConcurrent = cfg.maxConcurrentPositions;
+        _simulationBalanceSol = clampSimulationBalanceSOL(
+          requested: rawBalance,
+          positionSizeSOL: cfg.positionSizeSOL,
+        );
+      } else {
+        _simulationBalanceSol = clampSimulationBalanceSOL(
+          requested: value,
+          positionSizeSOL: _positionSize,
+        );
+      }
     });
     _persistSetupState();
   }
@@ -176,6 +222,19 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     _persistSetupState();
   }
 
+  void _handleExecModeChanged(ExecutionMode mode) {
+    if (mode == ExecutionMode.live && !kLiveTradingEnabled) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(kLiveTradingDisabledReason)));
+      return;
+    }
+
+    HapticFeedback.selectionClick();
+    setState(() => _execMode = mode);
+    _persistSetupState();
+  }
+
   /// Apply AI-extracted strategy parameters to the setup state.
   void _applyAiParams(StrategyParams params) {
     setState(() {
@@ -186,6 +245,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       if (params.maxLiquidity != null) _maxLiquidity = params.maxLiquidity!;
       if (params.positionSizeSOL != null)
         _positionSize = params.positionSizeSOL!;
+      if (params.simulationBalanceSOL != null) {
+        _simulationBalanceSol = params.simulationBalanceSOL!;
+      }
       if (params.maxConcurrentPositions != null)
         _maxConcurrent = params.maxConcurrentPositions!;
       if (params.defaultBinRange != null) _binRange = params.defaultBinRange!;
@@ -197,6 +259,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       if (params.maxDailyLossSOL != null) _dailyLimit = params.maxDailyLossSOL!;
       if (params.cooldownMinutes != null)
         _cooldownMinutes = params.cooldownMinutes!;
+
+      _simulationBalanceSol = clampSimulationBalanceSOL(
+        requested: _simulationBalanceSol,
+        positionSizeSOL: _positionSize,
+      );
     });
     _persistSetupState();
   }
@@ -210,111 +277,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     }
   }
 
-  /// Sign a transaction via MWA and submit to the backend.
-  ///
-  /// When [setupLiveBotId] is provided, always uses sign-only + submitSigned
-  /// so the backend can trigger `finalizeLiveSession` after confirmation.
-  /// Otherwise tries signAndSend first, falling back to sign + submit.
-  Future<void> _signAndSubmitWithFallback(
-    MwaWalletService mwa,
-    WalletRepository walletRepo,
-    Uint8List txBytes,
-    String cluster, {
-    String? setupLiveBotId,
-  }) async {
-    // For setup-live TXs, always route through backend so it can finalize
-    // the session key creation automatically after on-chain confirmation.
-    if (setupLiveBotId != null) {
-      final signedTxs = await mwa.signTransactions([txBytes], cluster: cluster);
-      if (signedTxs.isEmpty) {
-        throw Exception('Transaction signing was cancelled');
-      }
-      final txBase64 = base64Encode(signedTxs.first);
-
-      // Wait for foreground restoration after MWA session closes,
-      // then retry submitSigned with exponential backoff.
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      for (var attempt = 0; attempt < 5; attempt++) {
-        try {
-          await walletRepo.submitSigned(
-            transactionBase64: txBase64,
-            setupLiveBotId: setupLiveBotId,
-          );
-          return;
-        } catch (e) {
-          final msg = e.toString();
-          final isRetryable =
-              msg.contains('SocketException') ||
-              msg.contains('Connection refused') ||
-              msg.contains('connection timeout') ||
-              msg.contains('503') ||
-              msg.contains('Service Unavailable') ||
-              msg.contains('429') ||
-              msg.contains('Too Many Requests');
-          if (!isRetryable || attempt == 4) rethrow;
-          debugPrint('[Setup] submitSigned attempt $attempt failed: $e');
-          await Future<void>.delayed(
-            Duration(milliseconds: 1000 * (attempt + 1)),
-          );
-        }
-      }
-      return;
-    }
-
-    try {
-      final signatures = await mwa.signAndSendTransactions([
-        txBytes,
-      ], cluster: cluster);
-      if (signatures.isEmpty) {
-        throw Exception('Transaction was rejected by wallet');
-      }
-    } catch (e) {
-      final msg = e.toString();
-      final isSimulationError =
-          msg.contains('simulation') ||
-          msg.contains('Simulation') ||
-          msg.contains('Transaction failed') ||
-          msg.contains('failed to send');
-
-      if (!isSimulationError) rethrow;
-
-      debugPrint('[Setup] signAndSend failed ($msg), trying sign + submit');
-
-      final signedTxs = await mwa.signTransactions([txBytes], cluster: cluster);
-      if (signedTxs.isEmpty) {
-        throw Exception('Transaction signing was cancelled');
-      }
-
-      final txBase64 = base64Encode(signedTxs.first);
-
-      // Foreground delay + retry (same MWA background issue).
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      for (var attempt = 0; attempt < 5; attempt++) {
-        try {
-          await walletRepo.submitSigned(transactionBase64: txBase64);
-          return;
-        } catch (e) {
-          final msg = e.toString();
-          final isRetryable =
-              msg.contains('SocketException') ||
-              msg.contains('Connection refused') ||
-              msg.contains('connection timeout') ||
-              msg.contains('503') ||
-              msg.contains('Service Unavailable') ||
-              msg.contains('429') ||
-              msg.contains('Too Many Requests');
-          if (!isRetryable || attempt == 4) rethrow;
-          debugPrint(
-            '[Setup] submitSigned fallback attempt $attempt failed: $e',
-          );
-          await Future<void>.delayed(
-            Duration(milliseconds: 1000 * (attempt + 1)),
-          );
-        }
-      }
-    }
-  }
-
+  /// Create a bot and start it. Live on-chain setup is gated behind
+  /// kLiveTradingEnabled — currently disabled.
   Future<void> _activate(double? depositSol) async {
     if (_isActivating) return;
     setState(() {
@@ -332,10 +296,12 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       final strategyMode = isSageAi ? 'sage-ai' : 'rule-based';
       final riskCfg = riskConfigs[_risk]!;
       final isLive = _execMode == ExecutionMode.live;
-      final modeName = isLive ? 'live' : 'simulation';
 
-      final walletRepo = ref.read(walletRepositoryProvider);
-      final mwa = ref.read(mwaWalletServiceProvider);
+      if (isLive && !kLiveTradingEnabled) {
+        throw Exception(kLiveTradingDisabledReason);
+      }
+
+      final modeName = isLive ? 'live' : 'simulation';
 
       final config = BotConfig(
         name: _nameController.text.trim().isEmpty
@@ -357,104 +323,57 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               ? riskCfg.maxHoldTimeMinutes
               : _maxHoldMinutes,
           'maxDailyLossSOL': _dailyLimit,
-          'cooldownMinutes': isSageAi ? 79 : _cooldownMinutes,
+          'cooldownMinutes': isSageAi
+              ? kDefaultCustomEntry.cooldownMinutes
+              : _cooldownMinutes,
           'cronIntervalSeconds': 30,
-          'simulationBalanceSOL': 20.0,
-          'minVolume24h': isSageAi ? 1000.0 : _minVolume,
-          'minLiquidity': isSageAi ? 100.0 : _minLiquidity,
-          'maxLiquidity': isSageAi ? 1000000.0 : _maxLiquidity,
-          'defaultBinRange': isSageAi ? 10 : _binRange,
+          'simulationBalanceSOL': _simulationBalanceSol,
+          'minVolume24h': isSageAi
+              ? kDefaultCustomEntry.minVolume24h
+              : _minVolume,
+          'minLiquidity': isSageAi
+              ? kDefaultCustomEntry.minLiquidity
+              : _minLiquidity,
+          'maxLiquidity': isSageAi
+              ? kDefaultCustomEntry.maxLiquidity
+              : _maxLiquidity,
+          'defaultBinRange': isSageAi
+              ? kDefaultCustomEntry.defaultBinRange
+              : _binRange,
         },
       );
 
       updateStatus('Creating bot…');
-      final createdBot =
-          await ref.read(botListProvider.notifier).createBot(config);
+      // Create via repo directly — NOT through the notifier — so the
+      // botListProvider doesn't update and trigger the router redirect
+      // before we can navigate away from /setup.
+      final repo = ref.read(botRepositoryProvider);
+      final createdBot = await repo.createBot(config);
 
-      // ── Live-mode: ONE MWA signature handles everything ──
-      // Backend creates wallet (if needed) + registers agent + deposits
-      // trading capital to session signer — all in a single transaction.
-      bool liveSetupSucceeded = false;
-      if (isLive) {
-          try {
-            updateStatus('Setting up Seal wallet…');
-            final setupData = await walletRepo.setupLive(
-              botId: createdBot.botId,
-              depositSol: depositSol ?? 0,
-              dailyLimitSol: _dailyLimit,
-              perTxLimitSol: _positionSize,
-              sessionMaxAmountSol: _dailyLimit * 30,
-              sessionMaxPerTxSol: _positionSize * 2,
-            );
-
-            // If already finalized (409 retry), skip signing
-            if (setupData['finalized'] != true) {
-              final txBase64 = setupData['transaction'] as String;
-              final txBytes = Uint8List.fromList(base64Decode(txBase64));
-              final network =
-                  (setupData['network'] as String?) ?? EnvConfig.solanaNetwork;
-
-              // Single MWA signature — backend handles finalization
-              updateStatus('Approve in wallet…');
-              await _signAndSubmitWithFallback(
-                mwa,
-                walletRepo,
-                txBytes,
-                network,
-                setupLiveBotId: createdBot.botId,
-              );
-            }
-            liveSetupSucceeded = true;
-          } catch (e) {
-            final msg = e.toString();
-            if (msg.contains('409') || msg.contains('already')) {
-              liveSetupSucceeded = true;
-            } else {
-              // Live setup failed — DON'T continue to markSetupComplete.
-              // The bot was created but has no agent/session keys.
-              // Stay on this screen so the user can retry.
-              if (mounted) {
-                setState(() => _isActivating = false);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      '${_friendlyActivateError(e)} Tap to retry.',
-                    ),
-                    duration: const Duration(seconds: 5),
-                  ),
-                );
-              }
-              return;
-            }
-          }
-      }
-
-      // Auto-start the bot so user sees it running immediately.
-      if (!isLive || liveSetupSucceeded) {
-        updateStatus('Starting bot…');
-        try {
-          await ref.read(botRepositoryProvider).startBot(createdBot.botId);
-          await ref.read(botListProvider.notifier).refresh();
-        } catch (_) {
-          // Non-fatal: bot was created successfully, start can be retried.
-        }
-      }
-
+      // Mark setup complete BEFORE any state change that might trigger
+      // the router redirect.
       await _markSetupComplete();
+      ref.read(authStateProvider.notifier).markSetupCompleted();
 
-      // Refresh wallet balance after a brief delay — the on-chain state
-      // from finalization may need a moment to propagate through the RPC.
-      ref.invalidate(walletBalanceProvider);
-      // Schedule a second refresh 3 seconds later to catch any RPC cache lag.
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) ref.invalidate(walletBalanceProvider);
-      });
-
+      // Navigate immediately — this must happen before botListProvider
+      // refreshes, otherwise the router redirect fires first and yanks
+      // the user to '/'.
       if (mounted) {
         HapticFeedback.heavyImpact();
-        ref.read(authStateProvider.notifier).markSetupCompleted();
-        context.go('/');
+        context.go('/strategy/${createdBot.botId}');
       }
+
+      // Fire-and-forget: start bot + refresh list after navigation.
+      unawaited(
+        Future(() async {
+          try {
+            await repo.startBot(createdBot.botId);
+          } catch (_) {
+            // Non-fatal: bot was created successfully, start can be retried.
+          }
+          ref.read(botListProvider.notifier).refresh();
+        }),
+      );
     } catch (e) {
       if (mounted) {
         setState(() => _isActivating = false);
@@ -538,11 +457,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           selected: _path,
           onSelect: _selectPath,
           mode: _execMode,
-          onModeChanged: (m) {
-            HapticFeedback.selectionClick();
-            setState(() => _execMode = m);
-            _persistSetupState();
-          },
+          onModeChanged: _handleExecModeChanged,
           onNext: _nextStep,
           onSkip: _skip,
           nameController: _nameController,
@@ -554,6 +469,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       case 1: // step 1 — configure strategy
         if (_path == SetupPath.custom) {
           if (_useAiChat) {
+            // Tell the AI chat the current bankroll so it can suggest
+            // capital-coherent strategies.
+            ref
+                .read(setupChatProvider.notifier)
+                .setSimulationBalance(_simulationBalanceSol);
             // "Talk to Sage" — AI chat for strategy configuration
             stepWidget = SetupChatStep(
               key: const ValueKey('setup-chat'),
@@ -610,10 +530,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 setState(() => _maxLiquidity = v);
                 _persistSetupState();
               },
-              onPositionSizeChanged: (v) {
-                setState(() => _positionSize = v);
-                _persistSetupState();
-              },
+              onPositionSizeChanged: _setPositionSize,
               onMaxPositionsChanged: (v) {
                 setState(() => _maxConcurrent = v);
                 _persistSetupState();
@@ -658,10 +575,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             dailyLimit: _dailyLimit,
             profitTarget: _profitTarget,
             stopLoss: _stopLoss,
-            onPositionSizeChanged: (v) {
-              setState(() => _positionSize = v);
-              _persistSetupState();
-            },
+            onPositionSizeChanged: _setPositionSize,
             onDailyLimitChanged: (v) {
               setState(() => _dailyLimit = v);
               _persistSetupState();
@@ -693,6 +607,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           path: _path ?? SetupPath.sageAi,
           mode: _execMode,
           positionSizeSOL: _positionSize,
+          simulationBalanceSOL: _simulationBalanceSol,
+          onSimulationBalanceChanged: _setSimulationBalance,
           maxConcurrentPositions: isSageAi
               ? riskCfg.maxConcurrentPositions
               : _maxConcurrent,
