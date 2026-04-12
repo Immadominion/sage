@@ -27,12 +27,20 @@ class WalletRepository {
     return BotWalletInfo.fromJson(response.data as Map<String, dynamic>);
   }
 
-  /// Withdraw SOL from a bot's wallet to the owner's connected wallet.
+  /// Withdraw SOL from a bot's wallet to the owner's connected wallet
+  /// or an optional custom destination address.
   /// The backend decrypts the keypair and signs server-side.
-  Future<WithdrawalResult> withdraw(String botId, double amountSOL) async {
+  Future<WithdrawalResult> withdraw(
+    String botId,
+    double amountSOL, {
+    String? destination,
+  }) async {
     final response = await _api.post(
       '/wallet/withdraw/$botId',
-      data: {'amountSOL': amountSOL},
+      data: {
+        'amountSOL': amountSOL,
+        if (destination != null) 'destination': destination,
+      },
     );
     return WithdrawalResult.fromJson(response.data as Map<String, dynamic>);
   }
@@ -50,6 +58,23 @@ class WalletRepository {
     );
     return response.data as Map<String, dynamic>;
   }
+
+  /// Get aggregate balances across all live bot wallets.
+  Future<AggregateBalances> getAggregateBalances() async {
+    final response = await _api.get('/wallet/balances');
+    return AggregateBalances.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// Batch withdraw SOL from multiple bot wallets.
+  Future<SmartWithdrawResult> smartWithdraw(List<String> botIds) async {
+    final response = await _api.post(
+      '/wallet/smart-withdraw',
+      data: {'botIds': botIds},
+    );
+    return SmartWithdrawResult.fromJson(
+      response.data as Map<String, dynamic>,
+    );
+  }
 }
 
 /// WalletRepository Riverpod provider.
@@ -64,4 +89,10 @@ final walletBalanceProvider = FutureProvider.family<WalletBalance, String>((
 ) async {
   final repo = ref.read(walletRepositoryProvider);
   return repo.getBalance(botId);
+});
+
+/// Aggregate balances across all live bot wallets.
+final aggregateBalancesProvider = FutureProvider<AggregateBalances>((ref) {
+  final repo = ref.read(walletRepositoryProvider);
+  return repo.getAggregateBalances();
 });

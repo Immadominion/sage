@@ -83,7 +83,7 @@ class _ReviewFundStepState extends State<ReviewFundStep> {
   bool _disclaimerAccepted = false;
 
   double get _recommended =>
-      widget.positionSizeSOL * widget.maxConcurrentPositions;
+      (widget.positionSizeSOL + 0.07) * widget.maxConcurrentPositions;
   double get _simulationRecommended => recommendedSimulationBalanceSOL(
     positionSizeSOL: widget.positionSizeSOL,
     maxConcurrentPositions: widget.maxConcurrentPositions,

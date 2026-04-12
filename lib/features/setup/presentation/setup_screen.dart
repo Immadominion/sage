@@ -23,6 +23,8 @@ import 'package:sage/features/setup/presentation/widgets/path_step.dart';
 import 'package:sage/features/setup/presentation/widgets/review_fund_step.dart';
 import 'package:sage/features/chat/models/chat_models.dart';
 import 'package:sage/features/chat/presentation/widgets/setup_chat_step.dart';
+import 'package:sage/shared/widgets/deposit_sheet.dart';
+import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
 import 'package:sage/features/chat/providers/chat_provider.dart';
 
 /// Setup Wizard — shown once after first wallet connection.
@@ -355,12 +357,30 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       await _markSetupComplete();
       ref.read(authStateProvider.notifier).markSetupCompleted();
 
-      // Navigate immediately — this must happen before botListProvider
-      // refreshes, otherwise the router redirect fires first and yanks
-      // the user to '/'.
+      // ── For live bots, show deposit sheet BEFORE navigation ──
+      if (isLive && mounted) {
+        updateStatus('Fund your bot…');
+        final recommended = (_positionSize + 0.07) *
+            (isSageAi
+                ? riskCfg.maxConcurrentPositions
+                : _maxConcurrent);
+        await SageBottomSheet.show<bool>(
+          context: context,
+          title: 'Fund Your Bot',
+          builder: (c, text) => DepositSheet(
+            botId: createdBot.botId,
+            recommendedSol: recommended,
+            minSol: _positionSize + 0.07,
+            c: c,
+            text: text,
+          ),
+        );
+      }
+
+      // First bot → navigate to Home so user sees their dashboard.
       if (mounted) {
         HapticFeedback.heavyImpact();
-        context.go('/strategy/${createdBot.botId}');
+        context.go('/');
       }
 
       // Fire-and-forget: start bot + refresh list after navigation.

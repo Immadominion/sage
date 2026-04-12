@@ -67,8 +67,8 @@ String _friendlyLastError(String error) {
     final balance = vals.isNotEmpty ? vals[0].trim() : '?';
     final required = vals.length > 1 ? vals[1].trim() : '?';
     final depositNeeded = vals.length > 2 ? vals[2].trim() : required;
-    return 'Deposit at least $depositNeeded SOL using "Fund Wallet" to resume trading. '
-        '(Current: $balance SOL, needs: $required SOL)';
+    return 'Deposit at least $depositNeeded SOL to resume trading. '
+        '(Current: $balance SOL, needs: $required SOL per position)';
   }
   return error;
 }
@@ -542,7 +542,8 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       return;
     }
 
-    final recommended = bot.positionSizeSOL * bot.maxConcurrentPositions;
+    // Include rent+fees overhead per position (~0.07 SOL) in recommendation
+    final recommended = (bot.positionSizeSOL + 0.07) * bot.maxConcurrentPositions;
 
     final success = await SageBottomSheet.show<bool>(
       context: context,
@@ -550,7 +551,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       builder: (c, text) => DepositSheet(
         botId: widget.botId,
         recommendedSol: recommended,
-        minSol: bot.positionSizeSOL,
+        minSol: bot.positionSizeSOL + 0.07,
         c: c,
         text: text,
       ),
@@ -612,6 +613,128 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
     }
   }
 
+  /// Convert simulation bot to live mode, then prompt to fund.
+  Future<void> _convertToLive() async {
+    final botAsync = ref.read(botDetailProvider(widget.botId));
+    final bot = botAsync.value;
+    if (bot == null) return;
+
+    if (bot.engineRunning) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Stop the bot before going live')),
+        );
+      }
+      return;
+    }
+
+    // Confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final c = ctx.sage;
+        final text = ctx.sageText;
+        return AlertDialog(
+          backgroundColor: c.background,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.r),
+            side: BorderSide(color: c.accent.withValues(alpha: 0.5)),
+          ),
+          title: Text(
+            '⚡ Go Live',
+            style: text.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: c.accent,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Convert "${bot.name}" to live trading with REAL funds.',
+                style: text.bodyMedium?.copyWith(color: c.textPrimary),
+              ),
+              SizedBox(height: 8.h),
+              Text(
+                '• Simulation stats will be reset\n'
+                '• A dedicated wallet will be created\n'
+                '• You\'ll need to deposit SOL to trade',
+                style: text.bodySmall?.copyWith(
+                  color: c.textSecondary,
+                  height: 1.5,
+                ),
+              ),
+              SizedBox(height: 12.h),
+              Text(
+                'This cannot be undone.',
+                style: text.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.redAccent,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Cancel', style: TextStyle(color: c.textTertiary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(
+                'Go Live',
+                style: TextStyle(
+                  color: c.accent,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final repo = ref.read(botRepositoryProvider);
+      final updated = await repo.convertToLive(widget.botId);
+
+      // Refresh detail + list
+      ref.invalidate(botDetailProvider(widget.botId));
+      ref.read(botListProvider.notifier).refresh();
+
+      if (!mounted) return;
+
+      // Show deposit sheet so user can fund the new live wallet
+      final recommended =
+          (updated.positionSizeSOL + 0.07) * updated.maxConcurrentPositions;
+      await SageBottomSheet.show<bool>(
+        context: context,
+        title: 'Fund Your Bot',
+        builder: (c, text) => DepositSheet(
+          botId: widget.botId,
+          recommendedSol: recommended,
+          minSol: updated.positionSizeSOL + 0.07,
+          c: c,
+          text: text,
+        ),
+      );
+
+      if (mounted) {
+        ref.invalidate(walletBalanceProvider(widget.botId));
+        ref.invalidate(botDetailProvider(widget.botId));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to convert: ${_apiError(e)}')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.sage;
@@ -653,14 +776,14 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Bot needs more SOL to trade. Deposit at least $needed SOL '
-                  'using "Fund Wallet" below.',
+                  'Low balance — deposit at least $needed SOL to open more positions.',
                 ),
                 duration: const Duration(seconds: 8),
                 action: SnackBarAction(
                   label: 'Fund',
                   onPressed: () {
-                    // Scroll would be complex — just dismiss, the Fund button is visible
+                    final bot = ref.read(botDetailProvider(widget.botId)).value;
+                    if (bot != null) _showFundSheet(bot);
                   },
                 ),
               ),
@@ -923,6 +1046,8 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                       botAsync.whenData((bot) => _showFundSheet(bot));
                     } else if (value == 'withdraw') {
                       _showWithdrawSheet();
+                    } else if (value == 'go_live') {
+                      _convertToLive();
                     } else if (value == 'delete') {
                       _deleteBot();
                     }
@@ -981,6 +1106,24 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                               Text(
                                 'Withdraw',
                                 style: TextStyle(color: c.textPrimary),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (!isLiveBot && kLiveTradingEnabled)
+                        PopupMenuItem(
+                          value: 'go_live',
+                          child: Row(
+                            children: [
+                              Icon(
+                                PhosphorIconsBold.lightning,
+                                size: 18.sp,
+                                color: c.accent,
+                              ),
+                              SizedBox(width: 8.w),
+                              Text(
+                                'Go Live',
+                                style: TextStyle(color: c.accent),
                               ),
                             ],
                           ),
@@ -1371,9 +1514,11 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                     ),
                   ] else if (bot.mode == BotMode.live) ...[
                     SizedBox(height: 28.h),
-                    _SealStatusBanner(bot: bot),
-                    SizedBox(height: 14.h),
-                    _WalletBalanceRow(botId: bot.botId),
+                    _WalletSection(
+                      bot: bot,
+                      onDeposit: () => _showFundSheet(bot),
+                      onWithdraw: () => _showWithdrawSheet(),
+                    ),
                   ],
                 ],
               ),
@@ -1391,18 +1536,27 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
 
 /// Lightweight read-only banner showing Seal session status for live bots.
 /// Agent + session are now auto-created during bot deployment — no manual
-/// Placeholder — Seal-era wallet status banner.
-/// Retained as a structural stub behind kLiveTradingEnabled gate.
-/// Will be replaced with per-bot keypair wallet status when live trading is re-enabled.
-class _SealStatusBanner extends StatelessWidget {
+/// Wallet section for live bots — shows address, balance, deposit/withdraw.
+class _WalletSection extends ConsumerWidget {
   final Bot bot;
+  final VoidCallback onDeposit;
+  final VoidCallback onWithdraw;
 
-  const _SealStatusBanner({required this.bot});
+  const _WalletSection({
+    required this.bot,
+    required this.onDeposit,
+    required this.onWithdraw,
+  });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final c = context.sage;
     final text = context.sageText;
+    final addr = bot.walletAddress ?? '';
+    final shortAddr = addr.length > 8
+        ? '${addr.substring(0, 4)}...${addr.substring(addr.length - 4)}'
+        : addr;
+    final balanceAsync = ref.watch(walletBalanceProvider(bot.botId));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1416,101 +1570,128 @@ class _SealStatusBanner extends StatelessWidget {
             letterSpacing: 1.5,
           ),
         ),
+        SizedBox(height: 10.h),
+        // Address row
+        if (addr.isNotEmpty)
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: addr));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Wallet address copied')),
+              );
+            },
+            child: Row(
+              children: [
+                Icon(PhosphorIconsBold.wallet, size: 14.sp, color: c.textTertiary),
+                SizedBox(width: 8.w),
+                Text(
+                  shortAddr,
+                  style: text.bodySmall?.copyWith(
+                    color: c.textSecondary,
+                    fontSize: 12.sp,
+                  ),
+                ),
+                SizedBox(width: 4.w),
+                Icon(PhosphorIconsBold.copy, size: 12.sp, color: c.textTertiary),
+              ],
+            ),
+          ),
         SizedBox(height: 8.h),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
-          decoration: BoxDecoration(
-            color: c.textTertiary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(4.r),
-            border: Border.all(color: c.textTertiary.withValues(alpha: 0.25)),
-          ),
-          child: Text(
-            'Wallet status unavailable',
-            style: text.bodyMedium?.copyWith(
-              color: c.textTertiary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Wallet Balance Row (live bots only)
-// ═══════════════════════════════════════════════════════════════
-
-/// Shows the bot wallet SOL balance — flat inline row.
-class _WalletBalanceRow extends ConsumerWidget {
-  final String botId;
-  const _WalletBalanceRow({required this.botId});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final c = context.sage;
-    final text = context.sageText;
-    final balanceAsync = ref.watch(walletBalanceProvider(botId));
-
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: 8.h),
-      child: Row(
-        children: [
-          Icon(PhosphorIconsBold.wallet, size: 14.sp, color: c.textTertiary),
-          SizedBox(width: 8.w),
-          Text(
-            'Wallet Balance',
-            style: text.titleMedium?.copyWith(
-              fontSize: 14.sp,
-              fontWeight: FontWeight.w600,
-              color: c.textSecondary,
-            ),
-          ),
-          const Spacer(),
-          balanceAsync.when(
-            skipLoadingOnReload: true,
-            loading: () => SizedBox(
-              width: 14.sp,
-              height: 14.sp,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: c.textTertiary,
-              ),
-            ),
-            error: (_, __) => GestureDetector(
-              onTap: () => ref.invalidate(walletBalanceProvider(botId)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    PhosphorIconsBold.arrowClockwise,
-                    size: 12.sp,
-                    color: c.textTertiary,
-                  ),
-                  SizedBox(width: 4.w),
-                  Text(
-                    'Tap to retry',
-                    style: text.bodySmall?.copyWith(
-                      color: c.textTertiary,
-                      fontSize: 12.sp,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            data: (balance) => Text(
-              '${balance.balanceSOL.toStringAsFixed(4)} SOL',
+        // Balance row
+        Row(
+          children: [
+            Text(
+              'Balance',
               style: text.titleMedium?.copyWith(
                 fontSize: 14.sp,
-                fontWeight: FontWeight.w700,
-                color: c.textPrimary,
-                fontFeatures: const [FontFeature.tabularFigures()],
+                fontWeight: FontWeight.w600,
+                color: c.textSecondary,
               ),
             ),
-          ),
-        ],
-      ),
+            const Spacer(),
+            balanceAsync.when(
+              skipLoadingOnReload: true,
+              loading: () => SizedBox(
+                width: 14.sp,
+                height: 14.sp,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: c.textTertiary,
+                ),
+              ),
+              error: (_, __) => GestureDetector(
+                onTap: () => ref.invalidate(walletBalanceProvider(bot.botId)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(PhosphorIconsBold.arrowClockwise, size: 12.sp, color: c.textTertiary),
+                    SizedBox(width: 4.w),
+                    Text('Tap to retry', style: text.bodySmall?.copyWith(color: c.textTertiary, fontSize: 12.sp)),
+                  ],
+                ),
+              ),
+              data: (balance) => Text(
+                '${balance.balanceSOL.toStringAsFixed(4)} SOL',
+                style: text.titleMedium?.copyWith(
+                  fontSize: 14.sp,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 14.h),
+        // Deposit / Withdraw buttons
+        Row(
+          children: [
+            Expanded(
+              child: MWAButtonTapEffect(
+                onTap: onDeposit,
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 10.h),
+                  decoration: BoxDecoration(
+                    color: c.accent.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10.r),
+                    border: Border.all(color: c.accent.withValues(alpha: 0.2)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(PhosphorIconsBold.arrowDown, size: 14.sp, color: c.accent),
+                      SizedBox(width: 6.w),
+                      Text('Deposit', style: text.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: c.accent, fontSize: 13.sp)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(width: 10.w),
+            Expanded(
+              child: MWAButtonTapEffect(
+                onTap: onWithdraw,
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 10.h),
+                  decoration: BoxDecoration(
+                    color: c.surface,
+                    borderRadius: BorderRadius.circular(10.r),
+                    border: Border.all(color: c.borderSubtle),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(PhosphorIconsBold.arrowUp, size: 14.sp, color: c.textSecondary),
+                      SizedBox(width: 6.w),
+                      Text('Withdraw', style: text.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: c.textPrimary, fontSize: 13.sp)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

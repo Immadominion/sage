@@ -20,6 +20,8 @@ import 'package:sage/features/setup/presentation/widgets/path_step.dart';
 import 'package:sage/features/setup/presentation/widgets/review_fund_step.dart';
 import 'package:sage/features/chat/models/chat_models.dart';
 import 'package:sage/features/chat/presentation/widgets/setup_chat_step.dart';
+import 'package:sage/shared/widgets/deposit_sheet.dart';
+import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
 
 /// Full-screen strategy creation flow — same design language as [SetupScreen]
 /// but without wallet creation or setup-complete marking.
@@ -271,7 +273,29 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
       // Ensure setup is marked complete (bot exists → setup is done).
       ref.read(authStateProvider.notifier).markSetupCompleted();
 
-      // Navigate immediately — before refreshing the bot list.
+      // ── Step 2: For live bots, show deposit sheet BEFORE navigation ──
+      if (isLive && mounted) {
+        updateStatus('Fund your bot…');
+        final recommended = (_positionSize + 0.07) *
+            (isSageAi
+                ? riskCfg.maxConcurrentPositions
+                : _maxConcurrent);
+        await SageBottomSheet.show<bool>(
+          context: context,
+          title: 'Fund Your Bot',
+          builder: (c, text) => DepositSheet(
+            botId: createdBot.botId,
+            recommendedSol: recommended,
+            minSol: _positionSize + 0.07,
+            c: c,
+            text: text,
+          ),
+        );
+      }
+
+      // ── Step 3: Navigate ──
+      // This screen is always reached from the Automate tab (FAB),
+      // so navigate to the bot detail page. Back gesture returns to Automate.
       if (mounted) {
         HapticFeedback.heavyImpact();
         context.go('/strategy/${createdBot.botId}');

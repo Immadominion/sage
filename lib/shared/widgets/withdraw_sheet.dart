@@ -7,6 +7,7 @@ import 'package:rive/rive.dart';
 
 import 'package:sage/core/repositories/wallet_repository.dart';
 import 'package:sage/core/services/auth_service.dart';
+import 'package:sage/core/services/domain_resolver.dart';
 import 'package:sage/core/theme/app_colors.dart';
 
 /// Withdraw SOL from Sage bot wallets back to user's wallet.
@@ -55,13 +56,96 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
   String? _signature;
   double? _withdrawnSol;
 
+  // Destination wallet — defaults to connected wallet, can be customized.
+  late final TextEditingController _destController;
+  bool _useCustomDest = false;
+  String? _resolvedAddress; // set when domain resolves to an address
+  bool _isResolving = false;
+  String? _resolveError;
+
   String get _connectedWallet => ref.read(connectedWalletAddressProvider) ?? '';
 
-  /// Withdraw SOL from bot wallet back to the user's connected wallet.
-  /// In the new per-bot model, the backend decrypts the bot keypair and
-  /// signs the transfer server-side — no MWA signature needed.
+  /// The actual destination: resolved domain address > custom input > connected wallet.
+  String get _effectiveDestination {
+    if (!_useCustomDest) return _connectedWallet;
+    if (_resolvedAddress != null) return _resolvedAddress!;
+    return _destController.text.trim();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _destController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _destController.dispose();
+    super.dispose();
+  }
+
+  /// Resolve domain input (debounce happens naturally — user taps withdraw).
+  Future<void> _resolveDestination() async {
+    final input = _destController.text.trim();
+    if (input.isEmpty) return;
+
+    // Already a valid base58 address — nothing to resolve
+    if (DomainResolver.isValidAddress(input)) {
+      setState(() {
+        _resolvedAddress = input;
+        _resolveError = null;
+      });
+      return;
+    }
+
+    // Looks like a domain — resolve it
+    if (DomainResolver.isDomain(input)) {
+      setState(() {
+        _isResolving = true;
+        _resolveError = null;
+      });
+
+      final resolver = ref.read(domainResolverProvider);
+      final address = await resolver.resolveAddress(input);
+
+      if (!mounted) return;
+      setState(() {
+        _isResolving = false;
+        if (address != null) {
+          _resolvedAddress = address;
+          _resolveError = null;
+        } else {
+          _resolvedAddress = null;
+          _resolveError = 'Domain not found';
+        }
+      });
+      return;
+    }
+
+    // Neither valid address nor domain
+    setState(() {
+      _resolvedAddress = null;
+      _resolveError = 'Invalid address or domain';
+    });
+  }
+
+  /// Withdraw SOL from bot wallet to the destination wallet.
+  /// Backend decrypts the bot keypair and signs the transfer server-side.
   Future<void> _executeWithdraw() async {
-    if (_connectedWallet.isEmpty) {
+    // If custom destination, resolve domain first
+    if (_useCustomDest && _destController.text.trim().isNotEmpty) {
+      await _resolveDestination();
+      if (_resolveError != null || (_resolvedAddress == null && _useCustomDest)) {
+        setState(() {
+          _state = _SheetState.error;
+          _errorMessage = _resolveError ?? 'Could not resolve destination address.';
+        });
+        return;
+      }
+    }
+
+    final dest = _useCustomDest ? _effectiveDestination : _connectedWallet;
+    if (dest.isEmpty) {
       setState(() {
         _state = _SheetState.error;
         _errorMessage = 'Wallet not connected. Please reconnect your wallet.';
@@ -75,10 +159,12 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
     try {
       final walletRepo = ref.read(walletRepositoryProvider);
 
-      // Backend decrypts the bot keypair, signs, and sends the transfer.
+      // Backend clamps to max withdrawable (balance - fee reserve).
+      // Pass custom destination if different from owner wallet.
       final result = await walletRepo.withdraw(
         widget.botId,
         widget.availableBalanceSol,
+        destination: _useCustomDest ? dest : null,
       );
 
       if (!result.success) {
@@ -152,42 +238,20 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
 
   Widget _buildInput(SageColors c, TextTheme text) {
     final hasEnough = widget.availableBalanceSol > 0;
+    final shortWallet = _connectedWallet.length > 8
+        ? '${_connectedWallet.substring(0, 6)}\u2026${_connectedWallet.substring(_connectedWallet.length - 4)}'
+        : _connectedWallet;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Withdraw SOL from your bot wallets back to your connected Phantom wallet.',
+          'Withdraw SOL from your bot wallet.',
           style: text.bodyMedium?.copyWith(color: c.textSecondary),
         ),
 
-        SizedBox(height: 12.h),
-
-        // Info note
-        SizedBox(
-          width: double.infinity,
-
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(PhosphorIconsBold.info, size: 16.sp, color: c.accent),
-              SizedBox(width: 8.w),
-              Expanded(
-                child: Text(
-                  'All funds will be returned to your Phantom wallet. '
-                  'You can set up new bots anytime.',
-                  style: text.bodySmall?.copyWith(
-                    color: c.textSecondary,
-                    fontSize: 12.sp,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        SizedBox(height: 20.h),
+        SizedBox(height: 16.h),
 
         // Balance info
         _InfoRow(
@@ -199,15 +263,153 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
 
         Divider(height: 1, color: c.borderSubtle),
 
-        // Destination
-        _InfoRow(
-          label: 'Destination',
-          value: _connectedWallet.isNotEmpty
-              ? '${_connectedWallet.substring(0, 6)}\u2026${_connectedWallet.substring(_connectedWallet.length - 4)}'
-              : 'Not connected',
-          c: c,
-          text: text,
+        // Destination row — default or custom toggle
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 10.h),
+          child: Row(
+            children: [
+              Text(
+                'Destination',
+                style: text.titleMedium?.copyWith(
+                  fontSize: 14.sp,
+                  fontWeight: FontWeight.w600,
+                  color: c.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              if (!_useCustomDest)
+                Text(
+                  shortWallet.isNotEmpty ? shortWallet : 'Not connected',
+                  style: text.titleMedium?.copyWith(
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.w700,
+                    color: c.textPrimary,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              SizedBox(width: 8.w),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _useCustomDest = !_useCustomDest;
+                  if (!_useCustomDest) {
+                    _destController.clear();
+                    _resolvedAddress = null;
+                    _resolveError = null;
+                  }
+                }),
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  decoration: BoxDecoration(
+                    color: _useCustomDest ? c.accent.withValues(alpha: 0.15) : c.surfaceElevated,
+                    borderRadius: BorderRadius.circular(6.r),
+                    border: Border.all(
+                      color: _useCustomDest ? c.accent : c.borderSubtle,
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    _useCustomDest ? 'Custom' : 'Edit',
+                    style: text.bodySmall?.copyWith(
+                      color: _useCustomDest ? c.accent : c.textTertiary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11.sp,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+
+        // Custom destination input
+        if (_useCustomDest) ...[
+          Container(
+            decoration: BoxDecoration(
+              color: c.surfaceElevated,
+              borderRadius: BorderRadius.circular(10.r),
+              border: Border.all(
+                color: _resolveError != null ? c.loss : c.borderSubtle,
+              ),
+            ),
+            child: TextField(
+              controller: _destController,
+              style: text.bodyMedium?.copyWith(
+                color: c.textPrimary,
+                fontFamily: 'monospace',
+                fontSize: 13.sp,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Address or domain (e.g. miester.abc)',
+                hintStyle: text.bodyMedium?.copyWith(
+                  color: c.textTertiary,
+                  fontSize: 13.sp,
+                ),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 12.w,
+                  vertical: 12.h,
+                ),
+                border: InputBorder.none,
+                suffixIcon: _isResolving
+                    ? Padding(
+                        padding: EdgeInsets.all(12.w),
+                        child: SizedBox(
+                          width: 16.w,
+                          height: 16.w,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(c.accent),
+                          ),
+                        ),
+                      )
+                    : _resolvedAddress != null
+                        ? Icon(PhosphorIconsBold.checkCircle,
+                            color: c.profit, size: 18.sp)
+                        : null,
+              ),
+              onChanged: (_) {
+                // Clear old resolved state on new input
+                if (_resolvedAddress != null || _resolveError != null) {
+                  setState(() {
+                    _resolvedAddress = null;
+                    _resolveError = null;
+                  });
+                }
+              },
+            ),
+          ),
+          if (_resolveError != null)
+            Padding(
+              padding: EdgeInsets.only(top: 4.h, left: 4.w),
+              child: Text(
+                _resolveError!,
+                style: text.bodySmall?.copyWith(color: c.loss, fontSize: 11.sp),
+              ),
+            ),
+          if (_resolvedAddress != null &&
+              _resolvedAddress != _destController.text.trim())
+            Padding(
+              padding: EdgeInsets.only(top: 4.h, left: 4.w),
+              child: Text(
+                'Resolves to ${_resolvedAddress!.substring(0, 6)}\u2026${_resolvedAddress!.substring(_resolvedAddress!.length - 4)}',
+                style: text.bodySmall?.copyWith(
+                  color: c.profit,
+                  fontSize: 11.sp,
+                ),
+              ),
+            ),
+          SizedBox(height: 4.h),
+          Padding(
+            padding: EdgeInsets.only(left: 4.w),
+            child: Text(
+              'Supports .abc, .bonk, .skr, .poor and other AllDomains TLDs',
+              style: text.bodySmall?.copyWith(
+                color: c.textTertiary,
+                fontSize: 10.sp,
+              ),
+            ),
+          ),
+          SizedBox(height: 8.h),
+        ],
 
         Divider(height: 1, color: c.borderSubtle),
 
@@ -307,7 +509,7 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
             ),
             SizedBox(height: 8.h),
             Text(
-              'Sending ${widget.availableBalanceSol.toStringAsFixed(4)} SOL to your wallet',
+              'Sending SOL to ${_useCustomDest ? "custom wallet" : "your wallet"}',
               style: text.bodySmall?.copyWith(color: c.textTertiary),
             ),
           ],
@@ -346,7 +548,7 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
         SizedBox(height: 8.h),
 
         Text(
-          '${(_withdrawnSol ?? widget.availableBalanceSol).toStringAsFixed(4)} SOL sent to your wallet',
+          '${(_withdrawnSol ?? widget.availableBalanceSol).toStringAsFixed(4)} SOL withdrawn',
           style: text.bodyMedium?.copyWith(color: c.textSecondary),
         ),
 

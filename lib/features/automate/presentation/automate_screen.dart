@@ -35,7 +35,7 @@ class AutomateScreen extends ConsumerWidget {
 
     final botsAsync = ref.watch(botListProvider);
 
-    // Listen to SSE events — auto-refresh bot list on relevant events
+    // Listen to SSE events — auto-refresh bot list AND invalidate detail cache
     ref.listen<AsyncValue<BotEvent>>(botEventStreamProvider, (_, next) {
       next.whenData((event) {
         if (event.isPositionOpened ||
@@ -45,6 +45,7 @@ class AutomateScreen extends ConsumerWidget {
             event.isBotError ||
             event.isScanCompleted) {
           ref.read(botListProvider.notifier).refresh();
+          ref.invalidate(botDetailProvider(event.botId));
         }
       });
     });

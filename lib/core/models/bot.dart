@@ -47,6 +47,9 @@ class Bot {
   /// Always accurate whether the bot is running, stopped, or never started.
   final double currentBalanceSol;
 
+  // Live bot wallet
+  final String? walletAddress;
+
   // Live engine data (only when running)
   final int activePositionCount;
   final bool engineRunning;
@@ -85,6 +88,7 @@ class Bot {
     this.lastActivityAt,
     required this.createdAt,
     required this.updatedAt,
+    this.walletAddress,
     this.activePositionCount = 0,
     this.engineRunning = false,
     this.engineStats,
@@ -142,6 +146,9 @@ class Bot {
           : null,
       createdAt: DateTime.parse(botData['createdAt'] as String),
       updatedAt: DateTime.parse(botData['updatedAt'] as String),
+      walletAddress:
+          (json['walletAddress'] as String?) ??
+          (botData['walletAddress'] as String?),
       activePositionCount:
           _parseInt(json['activePositionCount']) ??
           _parseInt(botData['activePositionCount']) ??

@@ -11,6 +11,8 @@ import 'package:sage/core/theme/app_colors.dart';
 import 'package:sage/core/theme/app_theme.dart';
 import 'package:sage/core/utils/bot_validators.dart';
 import 'package:sage/features/setup/models/risk_profile.dart';
+import 'package:sage/shared/widgets/deposit_sheet.dart';
+import 'package:sage/shared/widgets/sage_bottom_sheet.dart';
 
 import 'package:sage/features/automate/presentation/widgets/bot_form_fields.dart';
 import 'package:sage/features/automate/presentation/widgets/strategy_preset_selector.dart';
@@ -185,10 +187,20 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
                 Text(
                   '• Position size: ${_positionSize.toStringAsFixed(1)} SOL\n'
                   '• Max concurrent: $_maxConcurrent positions\n'
-                  '• Max daily loss: ${_maxDailyLossSOL.toStringAsFixed(1)} SOL',
+                  '• Max daily loss: ${_maxDailyLossSOL.toStringAsFixed(1)} SOL\n'
+                  '• Recommended deposit: ${((_positionSize + 0.07) * _maxConcurrent).toStringAsFixed(1)} SOL\n'
+                  '  (${_positionSize.toStringAsFixed(1)} + fees per position × $_maxConcurrent)',
                   style: text.bodySmall?.copyWith(
                     color: c.textSecondary,
                     height: 1.5,
+                  ),
+                ),
+                SizedBox(height: 8.h),
+                Text(
+                  'You\'ll be prompted to fund the bot wallet after creation.',
+                  style: text.bodySmall?.copyWith(
+                    color: c.accent,
+                    fontSize: 11.sp,
                   ),
                 ),
                 SizedBox(height: 12.h),
@@ -255,6 +267,22 @@ class _CreateBotSheetState extends ConsumerState<CreateBotSheet> {
 
       final notifier = ref.read(botListProvider.notifier);
       final bot = await notifier.createBot(config);
+
+      if (mounted && bot.mode == BotMode.live) {
+        // Live bot: show deposit sheet so user can fund the wallet immediately
+        final recommended = (_positionSize + 0.07) * _maxConcurrent;
+        await SageBottomSheet.show<bool>(
+          context: context,
+          title: 'Fund Your Bot',
+          builder: (c, text) => DepositSheet(
+            botId: bot.botId,
+            recommendedSol: recommended,
+            minSol: _positionSize + 0.07,
+            c: c,
+            text: text,
+          ),
+        );
+      }
 
       if (mounted) {
         HapticFeedback.mediumImpact();

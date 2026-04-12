@@ -27,7 +27,7 @@ enum Environment { development, staging, production }
 
 /// Default production backend URL. Update this when Railway deployment is live.
 /// Override per-build via `--dart-define=API_BASE_URL=<url>`.
-const String _kProductionApiUrl = 'http://192.168.1.113:3001';
+const String _kProductionApiUrl = 'https://sage-the-backend-production.up.railway.app';
 
 /// Default production Solana RPC. Override via `--dart-define=SOLANA_RPC_URL=<url>`.
 const String _kProductionRpcUrl = '';
@@ -82,14 +82,14 @@ class EnvConfig {
           'Set _kProductionApiUrl in env_config.dart or pass '
           '--dart-define=API_BASE_URL=<url>',
         );
-        return 'http://192.168.1.113:3001';
+        return 'https://sage-the-backend-production.up.railway.app';
       case Environment.development:
         debugPrint(
-          '⚠️ Dev mode: using http://localhost:3001. '
-          'For physical device testing, pass '
+          '⚠️ Dev mode: using remote backend. '
+          'For local dev, pass '
           '--dart-define=API_BASE_URL=http://<your-lan-ip>:3001',
         );
-        return 'http://192.168.1.113:3001';
+        return 'https://sage-the-backend-production.up.railway.app';
     }
   }
 

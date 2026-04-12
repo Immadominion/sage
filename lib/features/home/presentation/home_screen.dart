@@ -58,11 +58,13 @@ class HomeScreen extends ConsumerWidget {
       next.whenData((event) {
         if (event.isPositionOpened || event.isPositionClosed) {
           ref.read(botListProvider.notifier).refresh();
+          ref.invalidate(botDetailProvider(event.botId));
           ref.invalidate(activePositionsProvider);
         } else if (event.isBotStarted ||
             event.isBotStopped ||
             event.isBotError) {
           ref.read(botListProvider.notifier).refresh();
+          ref.invalidate(botDetailProvider(event.botId));
         }
       });
     });
@@ -127,7 +129,7 @@ class HomeScreen extends ConsumerWidget {
       0,
       (sum, b) => sum + b.currentBalanceSol,
     );
-    final totalPnl = bots.fold<double>(
+    final totalPnl = liveBots.fold<double>(
       0,
       (sum, b) => sum + (b.performanceSummary?.totalPnlSol ?? b.totalPnlSOL),
     );
@@ -139,7 +141,7 @@ class HomeScreen extends ConsumerWidget {
               ) /
               runningBots.length;
 
-    // Hero: sum of all bot balances (simulation + live)
+    // Hero: sum of live bot balances
     final heroBalance = totalDeployed;
 
     final wholePart = heroBalance.toStringAsFixed(1).split('.')[0];

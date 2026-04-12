@@ -62,6 +62,13 @@ class BotRepository {
     final response = await _api.put('/bot/$botId/rename', data: {'name': name});
     return Bot.fromJson(response.data as Map<String, dynamic>);
   }
+
+  /// Convert a simulation bot to live mode.
+  /// Returns the updated bot with wallet address.
+  Future<Bot> convertToLive(String botId) async {
+    final response = await _api.post('/bot/$botId/convert-to-live');
+    return Bot.fromJson(response.data as Map<String, dynamic>);
+  }
 }
 
 /// BotRepository Riverpod provider.

@@ -54,3 +54,123 @@ class WithdrawalResult {
         error: json['error'] as String?,
       );
 }
+
+// ═══════════════════════════════════════════════════════════
+// Aggregate wallet models (GET /wallet/balances)
+// ═══════════════════════════════════════════════════════════
+
+class TokenBalance {
+  final String mint;
+  final double amount;
+  final int decimals;
+
+  const TokenBalance({
+    required this.mint,
+    required this.amount,
+    required this.decimals,
+  });
+
+  factory TokenBalance.fromJson(Map<String, dynamic> json) => TokenBalance(
+    mint: json['mint'] as String,
+    amount: (json['amount'] as num?)?.toDouble() ?? 0,
+    decimals: json['decimals'] as int? ?? 0,
+  );
+}
+
+class BotWalletBalances {
+  final String botId;
+  final String botName;
+  final String walletAddress;
+  final double balanceSOL;
+  final List<TokenBalance> tokens;
+
+  const BotWalletBalances({
+    required this.botId,
+    required this.botName,
+    required this.walletAddress,
+    required this.balanceSOL,
+    required this.tokens,
+  });
+
+  factory BotWalletBalances.fromJson(Map<String, dynamic> json) =>
+      BotWalletBalances(
+        botId: json['botId'] as String,
+        botName: json['botName'] as String,
+        walletAddress: json['walletAddress'] as String,
+        balanceSOL: (json['balanceSOL'] as num?)?.toDouble() ?? 0,
+        tokens: (json['tokens'] as List<dynamic>?)
+                ?.map((e) => TokenBalance.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+      );
+}
+
+class AggregateBalances {
+  final List<BotWalletBalances> wallets;
+  final double totalSOL;
+
+  const AggregateBalances({required this.wallets, required this.totalSOL});
+
+  factory AggregateBalances.fromJson(Map<String, dynamic> json) =>
+      AggregateBalances(
+        wallets: (json['wallets'] as List<dynamic>?)
+                ?.map((e) =>
+                    BotWalletBalances.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+        totalSOL: (json['totalSOL'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Smart withdraw result (POST /wallet/smart-withdraw)
+// ═══════════════════════════════════════════════════════════
+
+class SmartWithdrawBotResult {
+  final String botId;
+  final bool success;
+  final String? signature;
+  final double? amountSOL;
+  final String? error;
+
+  const SmartWithdrawBotResult({
+    required this.botId,
+    required this.success,
+    this.signature,
+    this.amountSOL,
+    this.error,
+  });
+
+  factory SmartWithdrawBotResult.fromJson(Map<String, dynamic> json) =>
+      SmartWithdrawBotResult(
+        botId: json['botId'] as String,
+        success: json['success'] as bool? ?? false,
+        signature: json['signature'] as String?,
+        amountSOL: (json['amountSOL'] as num?)?.toDouble(),
+        error: json['error'] as String?,
+      );
+}
+
+class SmartWithdrawResult {
+  final bool success;
+  final double totalWithdrawnSOL;
+  final List<SmartWithdrawBotResult> results;
+
+  const SmartWithdrawResult({
+    required this.success,
+    required this.totalWithdrawnSOL,
+    required this.results,
+  });
+
+  factory SmartWithdrawResult.fromJson(Map<String, dynamic> json) =>
+      SmartWithdrawResult(
+        success: json['success'] as bool? ?? false,
+        totalWithdrawnSOL:
+            (json['totalWithdrawnSOL'] as num?)?.toDouble() ?? 0,
+        results: (json['results'] as List<dynamic>?)
+                ?.map((e) =>
+                    SmartWithdrawBotResult.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+      );
+}
