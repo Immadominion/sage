@@ -272,34 +272,73 @@ class _ProviderCircleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.aura;
+    final enabledState = enabled && !isLoading;
 
     return SizedBox(
       width: 64.w,
       height: 64.w,
-      child: IconButton(
-        tooltip: tooltip,
-        onPressed: (enabled && !isLoading) ? onPressed : null,
-        style: IconButton.styleFrom(
-          backgroundColor: c.panelBackground.withValues(alpha: 0.36),
-          foregroundColor: c.textPrimary,
-          disabledBackgroundColor: c.panelBackground.withValues(alpha: 0.24),
-          disabledForegroundColor: c.textTertiary,
-          side: BorderSide(color: c.border, width: 1),
-          shape: const CircleBorder(),
-          fixedSize: Size.square(64.w),
-          padding: EdgeInsets.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            center: const Alignment(-0.28, -0.34),
+            radius: 0.92,
+            colors: enabledState
+                ? [
+                    c.surfaceElevated,
+                    c.panelBackground,
+                    c.background,
+                  ]
+                : [
+                    c.panelBackground.withValues(alpha: 0.86),
+                    c.background.withValues(alpha: 0.78),
+                    c.background.withValues(alpha: 0.72),
+                  ],
+            stops: const [0.0, 0.58, 1.0],
+          ),
+          border: Border.all(
+            color: enabledState
+                ? c.border.withValues(alpha: 0.92)
+                : c.border.withValues(alpha: 0.45),
+            width: 1.15,
+          ),
+          boxShadow: enabledState
+              ? [
+                  BoxShadow(
+                    color: c.overlay,
+                    blurRadius: 16,
+                    offset: const Offset(0, 8),
+                  ),
+                  BoxShadow(
+                    color: c.accent.withValues(alpha: 0.14),
+                    blurRadius: 18,
+                    spreadRadius: 0.5,
+                  ),
+                ]
+              : null,
         ),
-        icon: isLoading
-            ? SizedBox(
-                width: 22.w,
-                height: 22.w,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.2,
-                  valueColor: AlwaysStoppedAnimation<Color>(c.textPrimary),
-                ),
-              )
-            : Icon(icon, size: 28.sp),
+        child: IconButton(
+          tooltip: tooltip,
+          onPressed: enabledState ? onPressed : null,
+          style: IconButton.styleFrom(
+            foregroundColor:
+                enabledState ? c.textPrimary : c.textTertiary,
+            shape: const CircleBorder(),
+            fixedSize: Size.square(64.w),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          icon: isLoading
+              ? SizedBox(
+                  width: 22.w,
+                  height: 22.w,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(c.textPrimary),
+                  ),
+                )
+              : Icon(icon, size: 28.sp),
+        ),
       ),
     );
   }

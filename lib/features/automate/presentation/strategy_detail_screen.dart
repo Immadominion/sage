@@ -1312,31 +1312,6 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                     text: text,
                   ),
 
-                  // ── PnL sparkline placeholder (audit §5.7) ──
-                  // Deferred: backend doesn't expose a daily PnL series yet.
-                  // When `/bot/:id/pnl-history` lands, drop a sparkline here
-                  // (single line, semantic colour, ~24 px tall).
-
-                  SizedBox(height: 28.h),
-
-                  // ── Strategy Shape mini-card (audit §5.7) ──
-                  // Symbolic preview of this bot's bin distribution — lets
-                  // the operator see the configured shape at a glance.
-                  Text(
-                    'STRATEGY SHAPE',
-                    style: text.titleSmall?.copyWith(
-                      fontSize: 10.sp,
-                      letterSpacing: 1.5,
-                      color: c.textTertiary,
-                    ),
-                  ),
-                  SizedBox(height: 12.h),
-                  _StrategyShapeCard(
-                    binRange: bot.defaultBinRange,
-                    c: c,
-                    text: text,
-                  ),
-
                   SizedBox(height: 28.h),
 
                   // ── Engine Stats (if running) ──
