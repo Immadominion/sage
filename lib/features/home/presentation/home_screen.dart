@@ -121,6 +121,9 @@ class HomeScreen extends ConsumerWidget {
     double bottomPad,
     List<Bot> bots,
   ) {
+    // Keep hero spacing bounded so short viewports do not overflow.
+    final heroTopSpacing = (topPad + 56.h).clamp(56.h, 72.h).toDouble();
+
     // Aggregate data across all bots.
     final runningBots = bots.where((b) => b.engineRunning).toList();
     final allPositions = bots.expand((b) => b.livePositions).toList();
@@ -172,7 +175,7 @@ class HomeScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(height: topPad + 56.h),
+                  SizedBox(height: heroTopSpacing),
 
                   const AuraLabel(
                     'HOME',

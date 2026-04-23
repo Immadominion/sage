@@ -312,25 +312,18 @@ class _CreateStrategyScreenState extends ConsumerState<CreateStrategyScreen> {
         );
       }
 
-      // ── Step 3: Navigate ──
+      // ── Step 3: Start + refresh before navigate ──
+      updateStatus('Starting bot…');
+      await ref.read(botRepositoryProvider).startBot(createdBot.botId);
+      await ref.read(botListProvider.notifier).refresh();
+      ref.invalidate(botDetailProvider(createdBot.botId));
+
       // This screen is always reached from the Automate tab (FAB),
       // so navigate to the bot detail page. Back gesture returns to Automate.
       if (mounted) {
         HapticFeedback.heavyImpact();
         context.go('/strategy/${createdBot.botId}');
       }
-
-      // Fire-and-forget: start bot + refresh list after navigation.
-      unawaited(
-        Future(() async {
-          try {
-            await ref.read(botRepositoryProvider).startBot(createdBot.botId);
-          } catch (_) {
-            // Non-fatal: bot created, start can be retried from detail screen.
-          }
-          ref.read(botListProvider.notifier).refresh();
-        }),
-      );
     } catch (e) {
       if (mounted) {
         setState(() => _isActivating = false);

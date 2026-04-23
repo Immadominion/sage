@@ -295,6 +295,14 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
       ref.invalidate(botDetailProvider(widget.botId));
       ref.read(botListProvider.notifier).refresh();
     } catch (e) {
+      final msg = _apiError(e).toLowerCase();
+      if (msg.contains('already running')) {
+        // Backend state is authoritative; reconcile stale UI state.
+        ref.invalidate(botDetailProvider(widget.botId));
+        ref.read(botListProvider.notifier).refresh();
+        HapticFeedback.selectionClick();
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to start: ${_apiError(e)}')),

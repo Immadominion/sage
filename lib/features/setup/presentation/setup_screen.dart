@@ -421,23 +421,16 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         );
       }
 
+      updateStatus('Starting bot…');
+      await repo.startBot(createdBot.botId);
+      await ref.read(botListProvider.notifier).refresh();
+      ref.invalidate(botDetailProvider(createdBot.botId));
+
       // First bot → navigate to Home so user sees their dashboard.
       if (mounted) {
         HapticFeedback.heavyImpact();
         context.go('/');
       }
-
-      // Fire-and-forget: start bot + refresh list after navigation.
-      unawaited(
-        Future(() async {
-          try {
-            await repo.startBot(createdBot.botId);
-          } catch (_) {
-            // Non-fatal: bot was created successfully, start can be retried.
-          }
-          ref.read(botListProvider.notifier).refresh();
-        }),
-      );
     } catch (e) {
       if (mounted) {
         setState(() => _isActivating = false);

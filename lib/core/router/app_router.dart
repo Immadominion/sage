@@ -96,7 +96,7 @@ class _RouterRefresh extends ChangeNotifier {
     ref.listen(onboardingSeenProvider, (_, _) => notifyListeners());
     ref.listen(splashMinDelayProvider, (_, _) => notifyListeners());
     ref.listen(_localSetupCompletedProvider, (_, _) => notifyListeners());
-    ref.listen(botListProvider, (_, _) => notifyListeners());
+    ref.listen(setupCompletedProvider, (_, _) => notifyListeners());
     // setupCompletedProvider is derived from authState, so it auto-updates.
   }
 }
