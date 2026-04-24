@@ -12,6 +12,7 @@ import 'package:aura/core/models/bot.dart';
 import 'package:aura/core/config/live_trading_flags.dart';
 import 'package:aura/core/models/bot_event.dart';
 import 'package:aura/core/repositories/bot_repository.dart';
+import 'package:aura/core/models/wallet.dart';
 import 'package:aura/core/repositories/wallet_repository.dart';
 import 'package:aura/core/services/event_service.dart';
 import 'package:aura/core/theme/app_colors.dart';
@@ -1452,6 +1453,39 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                     SizedBox(height: 24.h),
                   ],
 
+                  // ── Wallet (elevated above PARAMETERS — live mode only) ──
+                  // Previously this lived at the bottom of the page so users
+                  // had to scroll past every param + position before they
+                  // could see how much they had. With the Smart Wallet
+                  // (Jupiter-powered) it's now the primary call-to-action.
+                  if (bot.mode == BotMode.live && kLiveTradingEnabled) ...[
+                    _WalletSection(
+                      bot: bot,
+                      onDeposit: () => _showFundSheet(bot),
+                      onWithdraw: () => _showWithdrawSheet(),
+                    ),
+                    SizedBox(height: 28.h),
+                  ] else if (bot.mode == BotMode.live) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(14.w),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(color: c.borderSubtle),
+                      ),
+                      child: Text(
+                        'Live wallet details will appear here when live trading is enabled.',
+                        style: text.bodySmall?.copyWith(
+                          color: c.textSecondary,
+                          fontSize: 12.sp,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 28.h),
+                  ],
+
                   // ── Parameters ──
                   Text(
                     'PARAMETERS',
@@ -1565,34 +1599,7 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
                       ),
                   ],
 
-                  // ── Bot Wallet Status (live mode only) ──
-                  if (bot.mode == BotMode.live && !kLiveTradingEnabled) ...[
-                    SizedBox(height: 28.h),
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(14.w),
-                      decoration: BoxDecoration(
-                        color: c.surface,
-                        borderRadius: BorderRadius.circular(12.r),
-                        border: Border.all(color: c.borderSubtle),
-                      ),
-                      child: Text(
-                        'Live wallet details will appear here when live trading is enabled.',
-                        style: text.bodySmall?.copyWith(
-                          color: c.textSecondary,
-                          fontSize: 12.sp,
-                          height: 1.5,
-                        ),
-                      ),
-                    ),
-                  ] else if (bot.mode == BotMode.live) ...[
-                    SizedBox(height: 28.h),
-                    _WalletSection(
-                      bot: bot,
-                      onDeposit: () => _showFundSheet(bot),
-                      onWithdraw: () => _showWithdrawSheet(),
-                    ),
-                  ],
+                  // ── Bot Wallet now rendered ABOVE Parameters; see top of column. ──
                 ],
               ),
             ),
@@ -1604,12 +1611,11 @@ class _StrategyDetailScreenState extends ConsumerState<StrategyDetailScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Bot Wallet Status Banner (read-only)
+// Smart Wallet panel (Jupiter-powered)
+// Shows SOL + every SPL token in the bot wallet with USD values, plus
+// a "Sweep stranded tokens" CTA when there's value beyond native SOL.
 // ═══════════════════════════════════════════════════════════════
 
-/// Lightweight read-only banner showing wallet status for live bots.
-/// Agent + session are now auto-created during bot deployment — no manual
-/// Wallet section for live bots — shows address, balance, deposit/withdraw.
 class _WalletSection extends ConsumerWidget {
   final Bot bot;
   final VoidCallback onDeposit;
@@ -1629,88 +1635,96 @@ class _WalletSection extends ConsumerWidget {
     final shortAddr = addr.length > 8
         ? '${addr.substring(0, 4)}...${addr.substring(addr.length - 4)}'
         : addr;
-    final balanceAsync = ref.watch(walletBalanceProvider(bot.botId));
+    final portfolioAsync = ref.watch(walletPortfolioProvider(bot.botId));
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'WALLET',
-          style: text.titleSmall?.copyWith(
-            color: c.textTertiary,
-            fontWeight: FontWeight.w800,
-            fontSize: 11.sp,
-            letterSpacing: 1.5,
-          ),
-        ),
-        SizedBox(height: 10.h),
-        // Address row
-        if (addr.isNotEmpty)
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: addr));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Wallet address copied')),
-              );
-            },
-            child: Row(
-              children: [
-                Icon(
-                  PhosphorIconsBold.wallet,
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(context.auraRadii.lg),
+        border: Border.all(color: c.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'SMART WALLET',
+                style: text.titleSmall?.copyWith(
+                  color: c.textTertiary,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11.sp,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () =>
+                    ref.invalidate(walletPortfolioProvider(bot.botId)),
+                child: Icon(
+                  PhosphorIconsBold.arrowClockwise,
                   size: 14.sp,
                   color: c.textTertiary,
                 ),
-                SizedBox(width: 8.w),
-                Text(
-                  shortAddr,
-                  style: text.bodySmall?.copyWith(
-                    color: c.textSecondary,
-                    fontSize: 12.sp,
+              ),
+            ],
+          ),
+          SizedBox(height: 10.h),
+          if (addr.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: addr));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Wallet address copied')),
+                );
+              },
+              child: Row(
+                children: [
+                  Icon(PhosphorIconsBold.wallet,
+                      size: 14.sp, color: c.textTertiary),
+                  SizedBox(width: 8.w),
+                  Text(
+                    shortAddr,
+                    style: text.bodySmall?.copyWith(
+                      color: c.textSecondary,
+                      fontSize: 12.sp,
+                    ),
+                  ),
+                  SizedBox(width: 4.w),
+                  Icon(PhosphorIconsBold.copy,
+                      size: 12.sp, color: c.textTertiary),
+                ],
+              ),
+            ),
+          SizedBox(height: 14.h),
+          portfolioAsync.when(
+            skipLoadingOnReload: true,
+            loading: () => Padding(
+              padding: EdgeInsets.symmetric(vertical: 18.h),
+              child: Center(
+                child: SizedBox(
+                  width: 18.sp,
+                  height: 18.sp,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: c.accent,
                   ),
                 ),
-                SizedBox(width: 4.w),
-                Icon(
-                  PhosphorIconsBold.copy,
-                  size: 12.sp,
-                  color: c.textTertiary,
-                ),
-              ],
-            ),
-          ),
-        SizedBox(height: 8.h),
-        // Balance row
-        Row(
-          children: [
-            Text(
-              'Balance',
-              style: text.titleMedium?.copyWith(
-                fontSize: 14.sp,
-                fontWeight: FontWeight.w600,
-                color: c.textSecondary,
               ),
             ),
-            const Spacer(),
-            balanceAsync.when(
-              skipLoadingOnReload: true,
-              loading: () => SizedBox(
-                width: 14.sp,
-                height: 14.sp,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: c.textTertiary,
-                ),
-              ),
-              error: (_, _) => GestureDetector(
-                onTap: () => ref.invalidate(walletBalanceProvider(bot.botId)),
+            error: (_, _) => GestureDetector(
+              onTap: () =>
+                  ref.invalidate(walletPortfolioProvider(bot.botId)),
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 14.h),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      PhosphorIconsBold.arrowClockwise,
-                      size: 12.sp,
-                      color: c.textTertiary,
-                    ),
-                    SizedBox(width: 4.w),
+                    Icon(PhosphorIconsBold.arrowClockwise,
+                        size: 14.sp, color: c.textTertiary),
+                    SizedBox(width: 6.w),
                     Text(
                       'Tap to retry',
                       style: text.bodySmall?.copyWith(
@@ -1721,91 +1735,476 @@ class _WalletSection extends ConsumerWidget {
                   ],
                 ),
               ),
-              data: (balance) => Text(
-                '${balance.balanceSOL.toStringAsFixed(4)} SOL',
-                style: text.titleMedium?.copyWith(
-                  fontSize: 14.sp,
-                  fontWeight: FontWeight.w700,
+            ),
+            data: (portfolio) =>
+                _buildPortfolioBody(context, ref, portfolio, c, text),
+          ),
+          SizedBox(height: 14.h),
+          // Deposit / Withdraw buttons (always visible).
+          Row(
+            children: [
+              Expanded(
+                child: MWAButtonTapEffect(
+                  onTap: onDeposit,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    decoration: BoxDecoration(
+                      color: c.accent.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10.r),
+                      border:
+                          Border.all(color: c.accent.withValues(alpha: 0.2)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(PhosphorIconsBold.arrowDown,
+                            size: 14.sp, color: c.accent),
+                        SizedBox(width: 6.w),
+                        Text(
+                          'Deposit',
+                          style: text.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: c.accent,
+                            fontSize: 13.sp,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 10.w),
+              Expanded(
+                child: MWAButtonTapEffect(
+                  onTap: onWithdraw,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    decoration: BoxDecoration(
+                      color: c.surface,
+                      borderRadius: BorderRadius.circular(10.r),
+                      border: Border.all(color: c.borderSubtle),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(PhosphorIconsBold.arrowUp,
+                            size: 14.sp, color: c.textSecondary),
+                        SizedBox(width: 6.w),
+                        Text(
+                          'Withdraw',
+                          style: text.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: c.textPrimary,
+                            fontSize: 13.sp,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortfolioBody(
+    BuildContext context,
+    WidgetRef ref,
+    WalletPortfolio portfolio,
+    AuraColors c,
+    TextTheme text,
+  ) {
+    final usd = portfolio.totalUsdValue;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Total value (the headline number).
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(
+              '\$${usd.toStringAsFixed(2)}',
+              style: text.headlineSmall?.copyWith(
+                fontSize: 26.sp,
+                fontWeight: FontWeight.w800,
+                color: c.textPrimary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            SizedBox(width: 8.w),
+            Text(
+              'total value',
+              style: text.bodySmall?.copyWith(
+                color: c.textTertiary,
+                fontSize: 12.sp,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 4.h),
+        // SOL row (always shown).
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 6.h),
+          child: Row(
+            children: [
+              Container(
+                width: 24.w,
+                height: 24.w,
+                decoration: BoxDecoration(
+                  color: c.accent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  'S',
+                  style: text.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: c.accent,
+                    fontSize: 11.sp,
+                  ),
+                ),
+              ),
+              SizedBox(width: 10.w),
+              Expanded(
+                child: Text(
+                  'SOL',
+                  style: text.titleSmall?.copyWith(
+                    color: c.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.sp,
+                  ),
+                ),
+              ),
+              Text(
+                '${portfolio.sol.amount.toStringAsFixed(4)} SOL',
+                style: text.bodySmall?.copyWith(
                   color: c.textPrimary,
+                  fontSize: 12.sp,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
-            ),
-          ],
-        ),
-        SizedBox(height: 14.h),
-        // Deposit / Withdraw buttons
-        Row(
-          children: [
-            Expanded(
-              child: MWAButtonTapEffect(
-                onTap: onDeposit,
-                child: Container(
-                  padding: EdgeInsets.symmetric(vertical: 10.h),
-                  decoration: BoxDecoration(
-                    color: c.accent.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(10.r),
-                    border: Border.all(color: c.accent.withValues(alpha: 0.2)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        PhosphorIconsBold.arrowDown,
-                        size: 14.sp,
-                        color: c.accent,
-                      ),
-                      SizedBox(width: 6.w),
-                      Text(
-                        'Deposit',
-                        style: text.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: c.accent,
-                          fontSize: 13.sp,
-                        ),
-                      ),
-                    ],
+              SizedBox(width: 8.w),
+              SizedBox(
+                width: 64.w,
+                child: Text(
+                  '\$${portfolio.sol.usdValue.toStringAsFixed(2)}',
+                  textAlign: TextAlign.right,
+                  style: text.bodySmall?.copyWith(
+                    color: c.textSecondary,
+                    fontSize: 12.sp,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
               ),
-            ),
-            SizedBox(width: 10.w),
-            Expanded(
-              child: MWAButtonTapEffect(
-                onTap: onWithdraw,
-                child: Container(
-                  padding: EdgeInsets.symmetric(vertical: 10.h),
-                  decoration: BoxDecoration(
-                    color: c.surface,
-                    borderRadius: BorderRadius.circular(10.r),
-                    border: Border.all(color: c.borderSubtle),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        PhosphorIconsBold.arrowUp,
-                        size: 14.sp,
-                        color: c.textSecondary,
+            ],
+          ),
+        ),
+        // Token rows.
+        ...portfolio.tokens.take(8).map(
+              (t) => Padding(
+                padding: EdgeInsets.symmetric(vertical: 6.h),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 24.w,
+                      height: 24.w,
+                      decoration: BoxDecoration(
+                        color: c.surfaceElevated,
+                        borderRadius: BorderRadius.circular(12.r),
                       ),
-                      SizedBox(width: 6.w),
-                      Text(
-                        'Withdraw',
-                        style: text.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: c.textPrimary,
-                          fontSize: 13.sp,
+                      alignment: Alignment.center,
+                      child: Text(
+                        t.symbol.isNotEmpty
+                            ? t.symbol.substring(0, 1).toUpperCase()
+                            : '?',
+                        style: text.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: c.textSecondary,
+                          fontSize: 11.sp,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    SizedBox(width: 10.w),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              t.symbol.isNotEmpty ? t.symbol : 'Unknown',
+                              overflow: TextOverflow.ellipsis,
+                              style: text.titleSmall?.copyWith(
+                                color: c.textPrimary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13.sp,
+                              ),
+                            ),
+                          ),
+                          if (t.isVerified) ...[
+                            SizedBox(width: 4.w),
+                            Icon(
+                              PhosphorIconsBold.sealCheck,
+                              size: 12.sp,
+                              color: c.accent,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _fmtAmount(t.amount),
+                      style: text.bodySmall?.copyWith(
+                        color: c.textPrimary,
+                        fontSize: 12.sp,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    SizedBox(width: 8.w),
+                    SizedBox(
+                      width: 64.w,
+                      child: Text(
+                        t.usdPrice == null
+                            ? '—'
+                            : '\$${t.usdValue.toStringAsFixed(2)}',
+                        textAlign: TextAlign.right,
+                        style: text.bodySmall?.copyWith(
+                          color: t.swappable
+                              ? c.textSecondary
+                              : c.textTertiary,
+                          fontSize: 12.sp,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
-        ),
+        if (portfolio.tokens.length > 8)
+          Padding(
+            padding: EdgeInsets.only(top: 4.h),
+            child: Text(
+              '+${portfolio.tokens.length - 8} more',
+              style: text.bodySmall?.copyWith(
+                color: c.textTertiary,
+                fontSize: 11.sp,
+              ),
+            ),
+          ),
+        // Sweep CTA — only when there are stranded swappable tokens.
+        if (portfolio.hasSweepableTokens) ...[
+          SizedBox(height: 12.h),
+          MWAButtonTapEffect(
+            onTap: () => _confirmSweep(context, ref, portfolio),
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 14.w),
+              decoration: BoxDecoration(
+                color: c.accent.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12.r),
+                border: Border.all(color: c.accent.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  Icon(PhosphorIconsBold.lightning,
+                      size: 16.sp, color: c.accent),
+                  SizedBox(width: 10.w),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sweep \$${portfolio.sweepableUsdValue.toStringAsFixed(2)} of stranded tokens',
+                          style: text.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: c.accent,
+                            fontSize: 13.sp,
+                          ),
+                        ),
+                        SizedBox(height: 2.h),
+                        Text(
+                          'Auto-swap to SOL via Jupiter, then withdraw to your wallet',
+                          style: text.bodySmall?.copyWith(
+                            color: c.textSecondary,
+                            fontSize: 11.sp,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(PhosphorIconsBold.arrowRight,
+                      size: 14.sp, color: c.accent),
+                ],
+              ),
+            ),
+          ),
+        ],
+        if (!portfolio.jupiterEnabled)
+          Padding(
+            padding: EdgeInsets.only(top: 8.h),
+            child: Text(
+              'USD prices unavailable — Smart Wallet routing offline',
+              style: text.bodySmall?.copyWith(
+                color: c.textTertiary,
+                fontSize: 10.5.sp,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  static String _fmtAmount(double v) {
+    if (v >= 1000) return v.toStringAsFixed(2);
+    if (v >= 1) return v.toStringAsFixed(4);
+    if (v >= 0.0001) return v.toStringAsFixed(6);
+    return v.toStringAsExponential(2);
+  }
+
+  Future<void> _confirmSweep(
+    BuildContext context,
+    WidgetRef ref,
+    WalletPortfolio portfolio,
+  ) async {
+    final c = context.aura;
+    final text = context.auraText;
+    final swappable = portfolio.tokens.where((t) => t.swappable).toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.background,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.r),
+          side: BorderSide(color: c.accent.withValues(alpha: 0.3)),
+        ),
+        title: Text(
+          'Sweep stranded tokens',
+          style: text.titleMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: c.textPrimary,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'These tokens will be swapped to SOL via Jupiter and then transferred to your connected wallet:',
+              style: text.bodyMedium?.copyWith(color: c.textSecondary),
+            ),
+            SizedBox(height: 12.h),
+            ...swappable.take(6).map(
+                  (t) => Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4.h),
+                    child: Row(
+                      children: [
+                        Text(
+                          '${_fmtAmount(t.amount)} ${t.symbol}',
+                          style: text.bodySmall?.copyWith(
+                            color: c.textPrimary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '\$${t.usdValue.toStringAsFixed(2)}',
+                          style: text.bodySmall?.copyWith(
+                            color: c.textSecondary,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            if (swappable.length > 6)
+              Text(
+                '+${swappable.length - 6} more',
+                style: text.bodySmall?.copyWith(color: c.textTertiary),
+              ),
+            SizedBox(height: 12.h),
+            Text(
+              'Estimated value: \$${portfolio.sweepableUsdValue.toStringAsFixed(2)}',
+              style: text.bodyMedium?.copyWith(
+                color: c.accent,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            SizedBox(height: 6.h),
+            Text(
+              'Swap routes use Jupiter\'s real-time aggregator. Slippage is auto-managed (RTSE).',
+              style: text.bodySmall?.copyWith(
+                color: c.textTertiary,
+                fontSize: 11.sp,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel', style: TextStyle(color: c.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Sweep & Withdraw',
+              style: TextStyle(
+                color: c.accent,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Sweeping tokens via Jupiter…'),
+        duration: Duration(seconds: 4),
+      ),
+    );
+
+    try {
+      final repo = ref.read(walletRepositoryProvider);
+      final result = await repo.sweepWallet(bot.botId);
+      if (!context.mounted) return;
+
+      ref.invalidate(walletPortfolioProvider(bot.botId));
+      ref.invalidate(walletBalanceProvider(bot.botId));
+      ref.invalidate(aggregateBalancesProvider);
+
+      final swept = result.totalSwappedSOL;
+      final withdrawn = result.withdraw?.amountSOL ?? 0;
+      final failed = result.outcomes.where((o) => !o.success).toList();
+      final summary = withdrawn > 0
+          ? 'Swept ${result.swappedTokenCount} tokens → ${swept.toStringAsFixed(4)} SOL · withdrew ${withdrawn.toStringAsFixed(4)} SOL'
+          : 'Swept ${result.swappedTokenCount} tokens → ${swept.toStringAsFixed(4)} SOL';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed.isEmpty
+                ? summary
+                : '$summary · ${failed.length} skipped',
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+      HapticFeedback.heavyImpact();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sweep failed: ${e.toString().split('\n').first}')),
+      );
+    }
   }
 }
 
